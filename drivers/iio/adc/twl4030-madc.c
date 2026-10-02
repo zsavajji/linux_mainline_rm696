@@ -25,6 +25,9 @@
 #include <linux/property.h>
 #include <linux/slab.h>
 #include <linux/mfd/twl.h>
+#include <linux/miscdevice.h>
+#include <linux/poll.h>
+#include <linux/uaccess.h>
 #include <linux/stddef.h>
 #include <linux/mutex.h>
 #include <linux/bitops.h>
@@ -664,6 +667,164 @@ out:
 	return ret;
 }
 
+/*
+ * /dev/twl4030-adc, as Nokia's 2.6.32 twl4030-madc had it, for Harmattan's battery daemon (BME's
+ * hwi twl5030.so): a raw read of one channel, and conversions set up by ioctl whose results are then
+ * read(), after poll(). Here a conversion runs at once, software-triggered (SW1).
+ * ponytail: Nokia's could also wait for a hardware (RT) trigger and averaged per channel; RT set-ups
+ * convert at once, and averaging applies to all set-up channels if any asks for it.
+ */
+#define TWL4030_MADC_IOC_MAGIC			'`'
+#define TWL4030_MADC_IOCX_ADC_RAW_READ		_IO(TWL4030_MADC_IOC_MAGIC, 0)
+#define TWL4030_MADC_IOCX_ADC_SETUP_CONVERSION	_IO(TWL4030_MADC_IOC_MAGIC, 1)
+#define TWL4030_MADC_IOCX_ADC_ABORT_CONVERSION	_IO(TWL4030_MADC_IOC_MAGIC, 2)
+
+struct twl4030_madc_user_parms {
+	int channel;
+	int average;
+	int status;
+	u16 result;
+};
+
+struct twl4030_madc_setup_parms {
+	u16 channel_mask;
+	u16 average_mask;
+	u16 delay;	/* ns */
+	u16 flags;
+};
+
+struct twl4030_madc_file {
+	struct mutex lock;
+	wait_queue_head_t wait;
+	bool ready;	/* set-up conversion done, results not read yet */
+	u16 results[TWL4030_MADC_MAX_CHANNELS];
+};
+
+/* Raw values of @channels into @out (indexed by channel) */
+static int twl4030_madc_raw(unsigned long channels, bool avg, u16 *out)
+{
+	struct twl4030_madc_request req = {
+		.channels = channels,
+		.do_avg = avg,
+		.method = TWL4030_MADC_SW1,
+		.raw = true,
+	};
+	int ret, i;
+
+	ret = twl4030_madc_conversion(&req);
+	if (ret < 0)
+		return ret;
+	for_each_set_bit(i, &channels, TWL4030_MADC_MAX_CHANNELS)
+		out[i] = req.rbuf[i] < 0 ? 0 : req.rbuf[i];
+	return 0;
+}
+
+static long twl4030_madc_file_ioctl(struct file *filp, unsigned int cmd,
+				    unsigned long arg)
+{
+	struct twl4030_madc_file *f = filp->private_data;
+	struct twl4030_madc_user_parms p;
+	struct twl4030_madc_setup_parms s;
+	u16 res[TWL4030_MADC_MAX_CHANNELS];
+	int ret;
+
+	switch (cmd) {
+	case TWL4030_MADC_IOCX_ADC_RAW_READ:
+		if (copy_from_user(&p, (void __user *)arg, sizeof(p)))
+			return -EFAULT;
+		if (p.channel < 0 || p.channel >= TWL4030_MADC_MAX_CHANNELS)
+			return -EINVAL;
+		ret = twl4030_madc_raw(BIT(p.channel), p.average, res);
+		p.status = ret;
+		p.result = ret ? 0 : res[p.channel];
+		return copy_to_user((void __user *)arg, &p, sizeof(p)) ? -EFAULT : 0;
+
+	case TWL4030_MADC_IOCX_ADC_SETUP_CONVERSION:
+		if (copy_from_user(&s, (void __user *)arg, sizeof(s)))
+			return -EFAULT;
+		mutex_lock(&f->lock);
+		if (f->ready) {
+			ret = -EBUSY;
+		} else {
+			memset(f->results, 0, sizeof(f->results));
+			ret = twl4030_madc_raw(s.channel_mask, s.average_mask, f->results);
+			f->ready = !ret;
+		}
+		mutex_unlock(&f->lock);
+		wake_up_interruptible(&f->wait);
+		return ret;
+
+	case TWL4030_MADC_IOCX_ADC_ABORT_CONVERSION:
+		mutex_lock(&f->lock);
+		f->ready = false;
+		mutex_unlock(&f->lock);
+		return 0;
+	}
+	return -EINVAL;
+}
+
+static ssize_t twl4030_madc_file_read(struct file *filp, char __user *buf,
+				      size_t len, loff_t *ppos)
+{
+	struct twl4030_madc_file *f = filp->private_data;
+
+	len = min(len, sizeof(f->results));
+	mutex_lock(&f->lock);
+	if (!f->ready) {
+		len = 0;	/* nothing set up, or aborted */
+	} else if (copy_to_user(buf, f->results, len)) {
+		len = -EFAULT;
+	} else {
+		f->ready = false;
+	}
+	mutex_unlock(&f->lock);
+	return len;
+}
+
+static __poll_t twl4030_madc_file_poll(struct file *filp, poll_table *wait)
+{
+	struct twl4030_madc_file *f = filp->private_data;
+
+	poll_wait(filp, &f->wait, wait);
+	return READ_ONCE(f->ready) ? EPOLLIN | EPOLLRDNORM : 0;
+}
+
+static int twl4030_madc_file_open(struct inode *inode, struct file *filp)
+{
+	struct twl4030_madc_file *f;
+
+	if (!twl4030_madc)
+		return -EIO;
+	f = kzalloc(sizeof(*f), GFP_KERNEL);
+	if (!f)
+		return -ENOMEM;
+	mutex_init(&f->lock);
+	init_waitqueue_head(&f->wait);
+	filp->private_data = f;
+	return 0;
+}
+
+static int twl4030_madc_file_release(struct inode *inode, struct file *filp)
+{
+	kfree(filp->private_data);
+	return 0;
+}
+
+static const struct file_operations twl4030_madc_fops = {
+	.owner = THIS_MODULE,
+	.open = twl4030_madc_file_open,
+	.release = twl4030_madc_file_release,
+	.read = twl4030_madc_file_read,
+	.poll = twl4030_madc_file_poll,
+	.unlocked_ioctl = twl4030_madc_file_ioctl,
+};
+
+static struct miscdevice twl4030_madc_miscdev = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "twl4030-adc",
+	.fops = &twl4030_madc_fops,
+};
+
 /**
  * twl4030_madc_set_current_generator() - setup bias current
  *
@@ -844,22 +1005,10 @@ static int twl4030_madc_probe(struct platform_device *pdev)
 	}
 	twl4030_madc = madc;
 
-	/* Configure MADC[3:6] */
-	ret = twl_i2c_read_u8(TWL_MODULE_USB, &regval,
-			TWL4030_USB_CARKIT_ANA_CTRL);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to read reg CARKIT_ANA_CTRL  0x%X\n",
-				TWL4030_USB_CARKIT_ANA_CTRL);
-		goto err_i2c;
-	}
-	regval |= TWL4030_USB_SEL_MADC_MCPC;
-	ret = twl_i2c_write_u8(TWL_MODULE_USB, regval,
-				 TWL4030_USB_CARKIT_ANA_CTRL);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to write reg CARKIT_ANA_CTRL 0x%X\n",
-				TWL4030_USB_CARKIT_ANA_CTRL);
-		goto err_i2c;
-	}
+	/*
+	 * Not "MADC[3:6] from the carkit" (CARKIT_ANA_CTRL.SEL_MADC_MCPC) on the N9: Nokia's driver left
+	 * that USB PHY register alone, and USB is the test phone's network
+	 */
 
 	/* Enable 3v1 bias regulator for MADC[3:6] */
 	madc->usb3v1 = devm_regulator_get(madc->dev, "vusb3v1");
@@ -880,6 +1029,12 @@ static int twl4030_madc_probe(struct platform_device *pdev)
 		goto err_usb3v1;
 	}
 
+	ret = misc_register(&twl4030_madc_miscdev);
+	if (ret) {
+		iio_device_unregister(iio_dev);
+		goto err_usb3v1;
+	}
+
 	return 0;
 
 err_usb3v1:
@@ -896,6 +1051,7 @@ static void twl4030_madc_remove(struct platform_device *pdev)
 	struct iio_dev *iio_dev = platform_get_drvdata(pdev);
 	struct twl4030_madc_data *madc = iio_priv(iio_dev);
 
+	misc_deregister(&twl4030_madc_miscdev);
 	iio_device_unregister(iio_dev);
 
 	twl4030_madc_set_current_generator(madc, 0, 0);
