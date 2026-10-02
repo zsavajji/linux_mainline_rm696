@@ -1518,11 +1518,19 @@ static int dss_ovl_unset_manager(struct omap_overlay *ovl)
 	 */
 	spin_lock_irqsave(&data_lock, flags);
 
+	/*
+	 * Unless an update is running, a manual update display's registers take effect with the next
+	 * one, so the overlay's disable can go in now; Harmattan's X driver (written for Nokia's
+	 * omapdss, which allowed it) detaches overlays at startup.
+	 */
 	if (ovl_manual_update(ovl) && op->extra_info_dirty) {
-		spin_unlock_irqrestore(&data_lock, flags);
-		DSSERR("need an update to change the manager\n");
-		r = -EINVAL;
-		goto err;
+		if (get_mgr_priv(ovl->manager)->updating) {
+			spin_unlock_irqrestore(&data_lock, flags);
+			DSSERR("need an update to change the manager\n");
+			r = -EINVAL;
+			goto err;
+		}
+		dss_ovl_write_regs_extra(ovl);
 	}
 
 	ovl->manager = NULL;
