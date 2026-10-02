@@ -1062,7 +1062,12 @@ static int omap_gpio_chip_init(struct gpio_bank *bank, struct device *pm_dev)
 			return -ENOMEM;
 		bank->chip.label = label;
 	}
-	bank->chip.base = -1;
+	/*
+	 * The bank's number range as legacy kernels had it (bank N from N * 32), from its DT alias
+	 * "gpioN" (omap3-n9.dts): Harmattan's userspace uses sysfs GPIO numbers (BME: gpio162)
+	 */
+	ret = of_alias_get_id(bank->chip.parent->of_node, "gpio");
+	bank->chip.base = ret >= 0 ? ret * bank->width : -1;
 	bank->chip.ngpio = bank->width;
 
 	irq = &bank->chip.irq;
