@@ -298,6 +298,14 @@ static void omap_wdt_shutdown(struct platform_device *pdev)
 {
 	struct omap_wdt_dev *wdev = platform_get_drvdata(pdev);
 
+	/*
+	 * NOWAYOUT: keep watching through a halt. On the test phone (no power-off, see omap3-n9.dts)
+	 * a power-off halts after device shutdown; the watchdogs are what reset it into stock
+	 * Harmattan. A reboot resets the SoC anyway.
+	 */
+	if (nowayout)
+		return;
+
 	mutex_lock(&wdev->lock);
 	if (wdev->omap_wdt_users) {
 		omap_wdt_disable(wdev);
