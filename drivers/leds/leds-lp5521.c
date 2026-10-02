@@ -19,6 +19,7 @@
 #include <linux/platform_data/leds-lp55xx.h>
 #include <linux/slab.h>
 #include <linux/of.h>
+#include <dt-bindings/leds/leds-lp55xx.h>
 
 #include "leds-lp55xx-common.h"
 
@@ -138,6 +139,12 @@ static int lp5521_post_init_device(struct lp55xx_chip *chip)
 		val |= LP5521_CLK_INT;
 
 	val |= (chip->pdata->charge_pump_mode << LP5521_CP_MODE_SHIFT) & LP5521_CP_MODE_MASK;
+	/*
+	 * Without the charge pump only the R output can drive an LED, from the battery: the
+	 * Nokia N9's single white LED, which its stock kernel ran this way
+	 */
+	if (chip->pdata->charge_pump_mode == LP55XX_CP_OFF)
+		val |= LP5521_R_TO_BATT;
 
 	ret = lp55xx_write(chip, LP5521_REG_CONFIG, val);
 	if (ret)
