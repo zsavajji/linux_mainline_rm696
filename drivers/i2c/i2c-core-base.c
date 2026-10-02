@@ -890,6 +890,16 @@ static void i2c_dev_set_name(struct i2c_adapter *adap,
 		return;
 	}
 
+	/*
+	 * A 10-bit address above 0x7f can't clash with a 7-bit one: name it as 2.6.32 did, without
+	 * the 0xa000 offset (Harmattan's nped finds the Nokia N9's GPS at 3-01fa)
+	 */
+	if ((client->flags & (I2C_CLIENT_TEN | I2C_CLIENT_SLAVE)) == I2C_CLIENT_TEN &&
+	    client->addr > 0x7f) {
+		dev_set_name(&client->dev, "%d-%04x", i2c_adapter_id(adap), client->addr);
+		return;
+	}
+
 	dev_set_name(&client->dev, "%d-%04x", i2c_adapter_id(adap),
 		     i2c_encode_flags_to_addr(client));
 }

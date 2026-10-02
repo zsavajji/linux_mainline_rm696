@@ -391,6 +391,22 @@ config SENSORS_APDS990X
 	   To compile this driver as a module, choose M here: the
 	   module will be called apds990x. If unsure, say N here.
 
+config NOKIA_AK8975
+	tristate "AK8975 magnetometer with Nokia's misc device interface"
+	depends on I2C
+	help
+	  The AK8975 3-axis magnetometer as Nokia's Harmattan kernel exposed it,
+	  /dev/ak8975N with one measurement per read(), for Harmattan's sensord
+	  on the Nokia N9. Mainline's IIO driver is CONFIG_AK8975.
+
+config BCM4751_GPS
+	tristate "BCM4751 GPS receiver (Nokia's raw I2C interface)"
+	depends on I2C
+	help
+	  The BCM4751 GPS receiver of the Nokia N9 as Nokia's Harmattan kernel
+	  exposed it: /dev/bcm4751-gps for raw I2C transfers by the closed
+	  location stack, sysfs enable, wakeup and hostreq.
+
 config HMC6352
 	tristate "Honeywell HMC6352 compass"
 	depends on I2C
