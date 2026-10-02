@@ -2782,11 +2782,123 @@ static void mxt_debug_init(struct mxt_data *data)
 }
 #endif
 
+/*
+ * The N9's touch configuration as stock applies it at boot (Harmattan's mxt_configure.sh, from
+ * /usr/share/mxt-config/configs): RM-696_Pyrenees_SMD_ES40_V1_6.bin, which its id map gives SMD
+ * Pyrenees panels fe86-fe89 and fe9x (this one: fe.91.96). Its T9 clipping and edge correction put
+ * a touch at the top edge (portrait) at x 0, inside mcompositor's swipe area; the older SMD_V1_6
+ * (Nokia's kernel cfg.h) left it 15 px in, a press and not a swipe. T7 as the bin: free-run, 185 Hz
+ * reports and no 20 ms idle scan before a touch is seen. Into the chip's RAM only, not its NVM.
+ * ponytail: one panel's config (others, LGD c1xx and SMD fe83-85, used SMD/LGD V1_6: add when seen);
+ * written once at probe, a chip reset brings back the NVM configuration.
+ */
+static const u8 mxt_n9_t7[] = {
+	0xff, 0xff, 0x32,
+};
+
+static const u8 mxt_n9_t8[] = {
+	0x0a, 0x00, 0x14, 0x14, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t9[] = {
+	0x8f, 0x00, 0x00, 0x13, 0x0b, 0x00, 0x21, 0x28,
+	0x02, 0x04, 0x00, 0x04, 0x04, 0x0e, 0x0a, 0x0a,
+	0x28, 0x0a, 0x55, 0x03, 0xdf, 0x01, 0x06, 0x12,
+	0x01, 0x01, 0xd4, 0x37, 0x98, 0x64, 0x0a,
+};
+
+static const u8 mxt_n9_t15[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t18[] = {
+	0x00, 0x00,
+};
+
+static const u8 mxt_n9_t19[] = {
+	0x01, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t20[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t22[] = {
+	0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x14, 0x00, 0x00, 0x07, 0x0a, 0x16, 0x1e, 0x25,
+	0x00,
+};
+
+static const u8 mxt_n9_t23[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t24[] = {
+	0x00, 0x01, 0x08, 0x00, 0x08, 0x3c, 0x64, 0x00,
+	0x64, 0x00, 0x00, 0xe8, 0x03, 0xc8, 0x00, 0x50,
+	0x00, 0xe8, 0x03,
+};
+
+static const u8 mxt_n9_t25[] = {
+	0x03, 0x00, 0xbc, 0x34, 0xe8, 0x12, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t27[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const u8 mxt_n9_t28[] = {
+	0x00, 0x00, 0x03, 0x09, 0x12, 0x0a,
+};
+
+static const struct {
+	u8 type;
+	u8 len;
+	const u8 *data;
+} mxt_n9_config[] = {
+	{ 7, sizeof(mxt_n9_t7), mxt_n9_t7 },
+	{ 8, sizeof(mxt_n9_t8), mxt_n9_t8 },
+	{ 9, sizeof(mxt_n9_t9), mxt_n9_t9 },
+	{ 15, sizeof(mxt_n9_t15), mxt_n9_t15 },
+	{ 18, sizeof(mxt_n9_t18), mxt_n9_t18 },
+	{ 19, sizeof(mxt_n9_t19), mxt_n9_t19 },
+	{ 20, sizeof(mxt_n9_t20), mxt_n9_t20 },
+	{ 22, sizeof(mxt_n9_t22), mxt_n9_t22 },
+	{ 23, sizeof(mxt_n9_t23), mxt_n9_t23 },
+	{ 24, sizeof(mxt_n9_t24), mxt_n9_t24 },
+	{ 25, sizeof(mxt_n9_t25), mxt_n9_t25 },
+	{ 27, sizeof(mxt_n9_t27), mxt_n9_t27 },
+	{ 28, sizeof(mxt_n9_t28), mxt_n9_t28 },
+};
+
+static void mxt_write_n9_config(struct mxt_data *data)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(mxt_n9_config); i++) {
+		struct mxt_object *obj = mxt_get_object(data, mxt_n9_config[i].type);
+
+		if (obj && __mxt_write_reg(data->client, obj->start_address,
+					   min_t(size_t, mxt_n9_config[i].len, mxt_obj_size(obj)),
+					   mxt_n9_config[i].data))
+			dev_warn(&data->client->dev, "N9 configuration: T%u not written\n",
+				 mxt_n9_config[i].type);
+	}
+}
+
 static int mxt_configure_objects(struct mxt_data *data,
 				 const struct firmware *cfg)
 {
 	struct device *dev = &data->client->dev;
 	int error;
+
+	if (of_machine_is_compatible("nokia,omap3-n9"))
+		mxt_write_n9_config(data);
 
 	error = mxt_init_t7_power_cfg(data);
 	if (error) {
