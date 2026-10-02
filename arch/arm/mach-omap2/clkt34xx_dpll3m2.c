@@ -18,9 +18,17 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/clk.h>
+#include <linux/clk/ti.h>
+#include <linux/cpufreq.h>
 #include <linux/debugfs.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
+#include <linux/workqueue.h>
 #include <linux/irqflags.h>
 #include <linux/io.h>
+#include <linux/math64.h>
 
 #include "soc.h"
 #include "clock.h"
@@ -123,35 +131,177 @@ out:
 	return ret;
 }
 
-/* ponytail: a test knob (dpll3_m2_ck's rate) until the L3 policy drives it */
-static int dpll3_m2_rate_get(void *data, u64 *val)
-{
-	struct clk *clk = clk_get(NULL, "dpll3_m2_ck");
+/*
+ * The policy, as Nokia's N9 kernel: L3 at OPP50 (M2 = 2: L3 and the SDRC at 97.6 MHz, VDD2 1.0 V) only
+ * while nothing needs it high. The CPU above its minimum (scaling_min_freq: stock's rule was its lowest
+ * OPP, 300 MHz; the user's phone sets a 600 MHz floor) holds it high (cpufreq), and so do
+ * omap3_l3_hold() callers: the SGX from before it gets its clock until after it lost it, so its clock
+ * (CORE/2) never changes while it runs. Raised at once, lowered 1 s after the last hold went.
+ */
+#define L3_LOWER_DELAY_MS	1000
 
-	if (IS_ERR(clk))
-		return PTR_ERR(clk);
-	*val = clk_get_rate(clk);
-	clk_put(clk);
+static struct clk *l3_m2;
+static unsigned long l3_high, l3_low;	/* dpll3_m2_ck rates */
+static DEFINE_MUTEX(l3_lock);
+static int l3_holds;
+static int l3_forced;			/* debugfs omap3_l3: 0 auto, 1 low, 2 high */
+static bool l3_cpu_high;
+static unsigned long l3_since;		/* jiffies at the last accounting */
+static u64 l3_ms[2];			/* time at OPP100, OPP50 */
+
+static void l3_account(void)
+{
+	unsigned long now = jiffies;
+
+	l3_ms[clk_get_rate(l3_m2) == l3_low] += jiffies_to_msecs(now - l3_since);
+	l3_since = now;
+}
+
+static unsigned long l3_target(void)
+{
+	if (l3_forced)
+		return l3_forced == 1 ? l3_low : l3_high;
+	return l3_holds ? l3_high : l3_low;
+}
+
+static void l3_apply(void)
+{
+	unsigned long rate = l3_target();
+
+	lockdep_assert_held(&l3_lock);
+	if (clk_get_rate(l3_m2) == rate)
+		return;
+	l3_account();
+	if (clk_set_rate(l3_m2, rate))
+		pr_err("omap3-l3: dpll3_m2_ck to %lu Hz failed\n", rate);
+}
+
+static void l3_lower_work(struct work_struct *work)
+{
+	mutex_lock(&l3_lock);
+	if (l3_target() == l3_low)
+		l3_apply();
+	mutex_unlock(&l3_lock);
+}
+static DECLARE_DELAYED_WORK(l3_lower, l3_lower_work);
+
+/* L3 at OPP100 from now until omap3_l3_release(); may sleep */
+void omap3_l3_hold(void)
+{
+	if (!l3_m2)
+		return;
+	mutex_lock(&l3_lock);
+	l3_holds++;
+	l3_apply();
+	mutex_unlock(&l3_lock);
+}
+EXPORT_SYMBOL_GPL(omap3_l3_hold);
+
+void omap3_l3_release(void)
+{
+	if (!l3_m2)
+		return;
+	mutex_lock(&l3_lock);
+	if (!WARN_ON(l3_holds <= 0) && !--l3_holds)
+		mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(L3_LOWER_DELAY_MS));
+	mutex_unlock(&l3_lock);
+}
+EXPORT_SYMBOL_GPL(omap3_l3_release);
+
+static void l3_cpu_work(struct work_struct *work)
+{
+	static bool held;
+	bool high = READ_ONCE(l3_cpu_high);
+
+	if (high == held)
+		return;
+	held = high;
+	if (high)
+		omap3_l3_hold();
+	else
+		omap3_l3_release();
+}
+static DECLARE_WORK(l3_cpu, l3_cpu_work);
+
+static int l3_cpufreq_cb(struct notifier_block *nb, unsigned long val, void *data)
+{
+	struct cpufreq_freqs *f = data;
+
+	if (val == CPUFREQ_POSTCHANGE) {
+		/* a new scaling_min_freq counts from the next frequency change */
+		WRITE_ONCE(l3_cpu_high, f->new > f->policy->min);
+		schedule_work(&l3_cpu);
+	}
+	return NOTIFY_OK;
+}
+static struct notifier_block l3_cpufreq_nb = { .notifier_call = l3_cpufreq_cb };
+
+static int l3_show(struct seq_file *m, void *v)
+{
+	mutex_lock(&l3_lock);
+	l3_account();
+	seq_printf(m, "%s, holds %d (CPU %s), %s; OPP50 %llu s, OPP100 %llu s\n",
+		   clk_get_rate(l3_m2) == l3_low ? "OPP50" : "OPP100", l3_holds,
+		   l3_cpu_high ? "high" : "low", (const char *[]){ "auto", "low", "high" }[l3_forced],
+		   div_u64(l3_ms[1], 1000), div_u64(l3_ms[0], 1000));
+	mutex_unlock(&l3_lock);
 	return 0;
 }
 
-static int dpll3_m2_rate_set(void *data, u64 val)
+static int l3_open(struct inode *inode, struct file *file)
 {
-	struct clk *clk = clk_get(NULL, "dpll3_m2_ck");
-	int ret;
-
-	if (IS_ERR(clk))
-		return PTR_ERR(clk);
-	ret = clk_set_rate(clk, val);
-	clk_put(clk);
-	return ret;
+	return single_open(file, l3_show, NULL);
 }
-DEFINE_DEBUGFS_ATTRIBUTE(dpll3_m2_rate_fops, dpll3_m2_rate_get, dpll3_m2_rate_set, "%llu\n");
 
-static int __init dpll3_m2_debugfs_init(void)
+/* for tests: "low" or "high" pins the level (even with the SGX on), "auto" gives it back */
+static ssize_t l3_write(struct file *file, const char __user *buf, size_t len, loff_t *ppos)
 {
-	if (cpu_is_omap34xx())
-		debugfs_create_file_unsafe("dpll3_m2_rate", 0600, NULL, NULL, &dpll3_m2_rate_fops);
+	char s[8] = {};
+	int f;
+
+	if (copy_from_user(s, buf, min(len, sizeof(s) - 1)))
+		return -EFAULT;
+	f = sysfs_streq(s, "auto") ? 0 : sysfs_streq(s, "low") ? 1 : sysfs_streq(s, "high") ? 2 : -1;
+	if (f < 0)
+		return -EINVAL;
+	mutex_lock(&l3_lock);
+	l3_forced = f;
+	l3_apply();
+	mutex_unlock(&l3_lock);
+	return len;
+}
+
+static const struct file_operations l3_fops = {
+	.open = l3_open, .read = seq_read, .llseek = seq_lseek, .release = single_release,
+	.write = l3_write,
+};
+
+static int __init omap3_l3_policy_init(void)
+{
+	struct cpufreq_policy *policy;
+	struct clk *m2;
+
+	/* SDRAM timings for both rates come from the board (sdram-nokia.c for the N9 and N950) */
+	if (!of_machine_is_compatible("nokia,omap3-n9") && !of_machine_is_compatible("nokia,omap3-n950"))
+		return 0;
+	m2 = clk_get(NULL, "dpll3_m2_ck");
+	if (IS_ERR(m2))
+		return PTR_ERR(m2);
+	l3_high = clk_get_rate(m2);
+	l3_low = l3_high / 2;
+	policy = cpufreq_cpu_get(0);
+	l3_cpu_high = !policy || policy->cur > policy->min;
+	if (policy)
+		cpufreq_cpu_put(policy);
+	mutex_lock(&l3_lock);
+	l3_m2 = m2;
+	l3_since = jiffies;
+	mutex_unlock(&l3_lock);
+	schedule_work(&l3_cpu);
+	mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(L3_LOWER_DELAY_MS));
+	cpufreq_register_notifier(&l3_cpufreq_nb, CPUFREQ_TRANSITION_NOTIFIER);
+	debugfs_create_file("omap3_l3", 0600, NULL, NULL, &l3_fops);
+	pr_info("omap3-l3: L3 scaling, OPP100 %lu Hz, OPP50 %lu Hz (dpll3_m2_ck)\n", l3_high, l3_low);
 	return 0;
 }
-late_initcall(dpll3_m2_debugfs_init);
+late_initcall_sync(omap3_l3_policy_init);

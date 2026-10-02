@@ -326,6 +326,15 @@ void omap3_core_dpll_restore_context(struct clk_hw *hw);
 
 extern const struct clk_hw_omap_ops clkhwops_omap2xxx_dpll;
 
+/* OMAP3 CORE/L3 scaling (mach-omap2/clkt34xx_dpll3m2.c): L3 at OPP100 while held; hold may sleep */
+#ifdef CONFIG_ARCH_OMAP3
+void omap3_l3_hold(void);
+void omap3_l3_release(void);
+#else
+static inline void omap3_l3_hold(void) { }
+static inline void omap3_l3_release(void) { }
+#endif
+
 #ifdef CONFIG_ATAGS
 int omap3430_clk_legacy_init(void);
 int omap3430es1_clk_legacy_init(void);
