@@ -558,6 +558,14 @@ config INPUT_TWL4030_PWRBUTTON
 	  To compile this driver as a module, choose M here. The module will
 	  be called twl4030_pwrbutton.
 
+config INPUT_VIBRA_SPI
+	tristate "SPI data driven vibrator (Nokia N9)"
+	depends on SPI && GPIOLIB
+	help
+	  The N9's vibra: its amplifier takes the waveform as a bit stream on
+	  an SPI data line. A force-feedback input device with custom periodic
+	  effects (raw samples), as Nokia's driver for Harmattan's immvibed.
+
 config INPUT_TWL4030_VIBRA
 	tristate "Support for TWL4030 Vibrator"
 	depends on TWL4030_CORE

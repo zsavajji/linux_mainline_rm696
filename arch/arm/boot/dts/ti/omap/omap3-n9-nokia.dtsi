@@ -1,0 +1,161 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * N9 peripherals with drivers from Nokia's Harmattan kernel (board-rm696-peripherals.c):
+ * - the vibra: its amplifier takes the waveform as a bit stream on McSPI2's data line (NOLO leaves
+ *   only mcspi2_simo in SPI mode; the clock and chip-select pads are other GPIOs), powered by GPIO
+ *   182; drivers/input/misc/vibra-spi.c;
+ * - the APDS990x ambient light and proximity sensor on I2C2, IRQ on GPIO 83, with the N9's
+ *   calibration in the driver (nokia,n9-apds990x); drivers/misc/apds990x.c, /dev/apds990x0;
+ * - the notification LED: an LP5521 on I2C2, its white LED on channel 0 (mainline's leds-lp5521);
+ * - the AK8975 magnetometer on I2C3 with Nokia's interface (nokia,n9-ak8975: /dev/ak89750 for
+ *   sensord, the board's axis mapping in the driver); drivers/misc/nokia-ak8975.c;
+ * - the BCM4751 GPS on I2C3 (nokia,bcm4751-gps: /dev/bcm4751-gps and sysfs at 3-01fa for nped),
+ *   NSHUTDOWN on GPIO 94, wakeup on GPIO 91, host request on GPIO 95; drivers/misc/bcm4751-gps.c.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/i2c/i2c.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/leds/common.h>
+#include <dt-bindings/leds/leds-lp55xx.h>
+
+&mcspi2 {
+	status = "okay";
+
+	vibra@0 {
+		compatible = "nokia,vibra-spi";
+		reg = <0>;
+		spi-max-frequency = <750000>;
+		power-gpios = <&gpio6 22 GPIO_ACTIVE_HIGH>;	/* gpio 182 */
+	};
+};
+
+&i2c2 {
+	apds990x@39 {
+		compatible = "nokia,n9-apds990x";
+		reg = <0x39>;
+		interrupts-extended = <&gpio3 19 IRQ_TYPE_LEVEL_LOW>;	/* gpio 83 */
+		Vdd-supply = <&vaux1>;
+		/* Vled: straight from the battery */
+	};
+
+	/*
+	 * As stock: enable on GPIO 41, the 32 kHz clock from outside, no charge pump (the LED from the
+	 * battery, leds-lp5521-cp-off.patch), 5 mA (13 mA at most). Named
+	 * stock's lp5521:channel0, which Harmattan's mce drives: brightness, and mce.ini's
+	 * LEDPatternNJoyRM696 programs through the chip's engine1_mode and engine1_load.
+	 */
+	led-controller@32 {
+		compatible = "national,lp5521";
+		reg = <0x32>;
+		clock-mode = /bits/ 8 <2>;			/* LP55XX_CLOCK_EXT */
+		clocks = <&omap_32k_fck>;
+		clock-names = "32k_clk";
+		ti,charge-pump-mode = <LP55XX_CP_OFF>;
+		enable-gpios = <&gpio2 9 GPIO_ACTIVE_HIGH>;	/* gpio 41 */
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		led@0 {
+			reg = <0>;
+			chan-name = "lp5521:channel0";
+			color = <LED_COLOR_ID_WHITE>;
+			led-cur = /bits/ 8 <50>;
+			max-cur = /bits/ 8 <130>;
+		};
+	};
+};
+
+
+&i2c3 {
+	/*
+	 * omap3-n9.dts has it for mainline's IIO driver, after this file's include (its compatible
+	 * would win): off, and the chip as its own node
+	 */
+	ak8975@f {
+		status = "disabled";
+	};
+
+	magnetometer@f {
+		compatible = "nokia,n9-ak8975";
+		reg = <0x0f>;
+		AVdd-supply = <&vaux1>;
+		DVdd-supply = <&vio>;
+	};
+
+	/* Stock: both supplies from VIO; the pads are GPIOs from NOLO */
+	gps@1fa {
+		compatible = "nokia,bcm4751-gps";
+		reg = <(0x1fa | I2C_TEN_BIT_ADDRESS)>;
+		enable-gpios = <&gpio3 30 GPIO_ACTIVE_HIGH>;	/* gpio 94 */
+		wakeup-gpios = <&gpio3 27 GPIO_ACTIVE_HIGH>;	/* gpio 91 */
+		host-req-gpios = <&gpio3 31 GPIO_ACTIVE_HIGH>;	/* gpio 95 */
+		Vbat-supply = <&vio>;
+		Vddio-supply = <&vio>;
+	};
+};
+
+/*
+ * The secure ROM's random number generator (Nokia's PPA service 29, SEC_HAL_RNG_GENERATE in Harmattan's
+ * sec_hal.h), through mainline's N900 glue: entropy, and the first call into the N9's secure world.
+ */
+/ {
+	rom_rng: rng {
+		compatible = "nokia,n900-rom-rng";
+		clocks = <&rng_ick>;
+		clock-names = "ick";
+	};
+};
+
+/*
+ * UART1 and UART4 aren't connected on the N9 (stock set up only UART2, Bluetooth, and UART3, the
+ * debug console): off. 8250_omap keeps a UART without a serdev child out of idle (autosuspend -1),
+ * and with it the CORE power domain: it never left ON on the test boots.
+ */
+&uart1 {
+	status = "disabled";
+};
+
+&uart4 {
+	status = "disabled";
+};
+
+/*
+ * McSPI1, 3 and 4 aren't used on the N9 (stock: the vibra on McSPI2; McSPI4 only for an SPI WLAN,
+ * the N9's is SDIO): off. The driver takes a DMA channel pair per chip select at probe, 14 of the
+ * sDMA's 32, and McBSP4 (Bluetooth audio) found none left for capture.
+ */
+&mcspi1 {
+	status = "disabled";
+};
+
+&mcspi3 {
+	status = "disabled";
+};
+
+&mcspi4 {
+	status = "disabled";
+};
+
+/*
+ * The eMMC as mmc0, so mmcblk0 as on stock's 2.6.32: Harmattan's fstab and usb_moded name
+ * /dev/mmcblk0p1 (MyDocs); with omap3.dtsi's aliases it was mmcblk1 and mass storage exported
+ * nothing. MMC1 (no slot on the N9) takes index 1, the WLAN stays mmc2.
+ */
+/ {
+	aliases {
+		mmc0 = &mmc2;
+		mmc1 = &mmc1;
+	};
+};
+
+/*
+ * Bluetooth's UART without DMA: received through DMA, bytes skip the per-character line-status
+ * check, so the zeros read while the chip sleeps (its TX held low) reached the H4 framing as data
+ * (serdev drops error-flagged bytes, serdev-ignore-errors.patch). Auto-RTS keeps the FIFO from
+ * overrunning (8250-omap-auto-rts.patch).
+ */
+&uart2 {
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
+};

@@ -10,6 +10,7 @@
 #include "omap3-n950-n9.dtsi"
 #include <dt-bindings/input/input.h>
 #include "omap3-n9-audio.dtsi"
+#include "omap3-n9-nokia.dtsi"
 
 / {
 	model = "Nokia N9";
