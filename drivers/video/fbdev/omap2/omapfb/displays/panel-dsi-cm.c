@@ -33,6 +33,7 @@
 #define DCS_READ_NUM_ERRORS	0x05
 #define DCS_BRIGHTNESS		0x51
 #define DCS_CTRL_DISPLAY	0x53
+#define DCS_WRITE_CABC		0x55
 #define DCS_GET_ID1		0xda
 #define DCS_GET_ID2		0xdb
 #define DCS_GET_ID3		0xdc
@@ -108,6 +109,18 @@ struct panel_drv_data {
 	bool ulps_enabled;
 	unsigned ulps_timeout;
 	struct delayed_work ulps_work;
+
+	/*
+	 * The N9 stock driver's Pyrenees controls, which Harmattan's mce drives through sysfs (see
+	 * dsicm_pyrenees_attrs): low power mode (DCS idle mode, for the standby screen), display
+	 * dimming (the panel fades brightness changes) and high brightness mode with its current
+	 * limiting (ACL, through the CABC command)
+	 */
+	bool pyrenees;
+	bool lpm, lpm_pending;
+	struct delayed_work lpm_work;
+	bool dimming;
+	u8 hbm, acl;
 };
 
 #define to_panel_data(p) container_of(p, struct panel_drv_data, dssdev)
@@ -465,6 +478,165 @@ static ssize_t dsicm_hw_revision_show(struct device *dev,
 	return sysfs_emit(buf, "%02x.%02x.%02x\n", id1, id2, id3);
 }
 
+/* DCS WRITE_CTRL_DISPLAY: BL and BCTRL, with the Pyrenees' display dimming (DD) and HBM (bits 6-7) */
+static int dsicm_write_ctrl_display(struct panel_drv_data *ddata)
+{
+	u8 ctrl = (1 << 2) | (1 << 5) | (ddata->dimming ? 1 << 3 : 0) | ddata->hbm << 6;
+
+	return dsicm_dcs_write_1(ddata, DCS_CTRL_DISPLAY, ctrl);
+}
+
+/* Low power mode: DCS idle mode (8 colours, a lower frame rate: stock's timer assumed 15 fps), within
+ * the visible area's partial mode, which stays on; stock switched partial mode with LPM only on
+ * panels without one */
+static int dsicm_write_lpm(struct panel_drv_data *ddata)
+{
+	int r = 0;
+
+	if (!ddata->partial_rows)
+		r = dsicm_dcs_write_0(ddata, ddata->lpm ? MIPI_DCS_ENTER_PARTIAL_MODE :
+					     MIPI_DCS_ENTER_NORMAL_MODE);
+	if (!r)
+		r = dsicm_dcs_write_0(ddata, ddata->lpm ? MIPI_DCS_ENTER_IDLE_MODE :
+					     MIPI_DCS_EXIT_IDLE_MODE);
+	return r;
+}
+
+/* High brightness mode always with current limiting, as stock */
+static int dsicm_write_hbm(struct panel_drv_data *ddata)
+{
+	int r = dsicm_dcs_write_1(ddata, DCS_WRITE_CABC, ddata->acl);
+
+	return r ? r : dsicm_write_ctrl_display(ddata);
+}
+
+/* A changed setting to the panel, if it's on (dsicm_power_on writes them all); ddata->lock held */
+static int dsicm_apply(struct panel_drv_data *ddata, int (*write)(struct panel_drv_data *))
+{
+	struct omap_dss_device *in = ddata->in;
+	int r;
+
+	if (!ddata->enabled)
+		return 0;
+
+	in->ops.dsi->bus_lock(in);
+	r = dsicm_wake_up(ddata);
+	if (!r)
+		r = write(ddata);
+	in->ops.dsi->bus_unlock(in);
+	return r;
+}
+
+static void dsicm_lpm_work(struct work_struct *work)
+{
+	struct panel_drv_data *ddata = container_of(work, struct panel_drv_data, lpm_work.work);
+
+	mutex_lock(&ddata->lock);
+	if (ddata->lpm_pending) {
+		ddata->lpm_pending = false;
+		ddata->lpm = true;
+		dsicm_apply(ddata, dsicm_write_lpm);
+	}
+	mutex_unlock(&ddata->lock);
+}
+
+/* Off at once; on 300 ms after the last update (dsicm_update postpones it), so that the standby
+ * screen is drawn first, as stock */
+#define DSICM_LPM_DELAY_MS	300
+
+static ssize_t dsicm_lpm_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	bool t;
+	int r;
+
+	r = kstrtobool(buf, &t);
+	if (r)
+		return r;
+
+	mutex_lock(&ddata->lock);
+	ddata->lpm_pending = false;
+	cancel_delayed_work(&ddata->lpm_work);
+	if (t) {
+		ddata->lpm_pending = true;
+		schedule_delayed_work(&ddata->lpm_work, msecs_to_jiffies(DSICM_LPM_DELAY_MS));
+	} else if (ddata->lpm) {
+		ddata->lpm = false;
+		r = dsicm_apply(ddata, dsicm_write_lpm);
+	}
+	mutex_unlock(&ddata->lock);
+
+	return r ? r : count;
+}
+
+static ssize_t dsicm_lpm_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ddata->lpm);
+}
+
+static ssize_t dsicm_dimming_store(struct device *dev, struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	bool t;
+	int r;
+
+	r = kstrtobool(buf, &t);
+	if (r)
+		return r;
+
+	mutex_lock(&ddata->lock);
+	ddata->dimming = t;
+	r = dsicm_apply(ddata, dsicm_write_ctrl_display);
+	mutex_unlock(&ddata->lock);
+
+	return r ? r : count;
+}
+
+static ssize_t dsicm_dimming_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ddata->dimming);
+}
+
+/*
+ * 0 off, 1 400 cd/m² with ACL 80%, 2 450 cd/m²: stock's values. The SMD Pyrenees has no 450, so 2
+ * is its 500 with ACL 70%, shown as 2 (stock hid the difference from the LGD panel this way).
+ */
+static ssize_t dsicm_hbm_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	static const u8 hbm[] = { 0, 1, 3 }, acl[] = { 0x00, 0x10, 0x11 };
+	unsigned int t;
+	int r;
+
+	r = kstrtouint(buf, 10, &t);
+	if (r)
+		return r;
+	if (t >= ARRAY_SIZE(hbm))
+		return -EINVAL;
+
+	mutex_lock(&ddata->lock);
+	ddata->hbm = hbm[t];
+	ddata->acl = acl[t];
+	r = dsicm_apply(ddata, dsicm_write_hbm);
+	mutex_unlock(&ddata->lock);
+
+	return r ? r : count;
+}
+
+static ssize_t dsicm_hbm_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", min_t(u8, ddata->hbm, 2));
+}
+
 static ssize_t dsicm_store_ulps(struct device *dev,
 		struct device_attribute *attr,
 		const char *buf, size_t count)
@@ -677,6 +849,22 @@ static const struct attribute_group dsicm_attr_group = {
 	.attrs = dsicm_attrs,
 };
 
+static DEVICE_ATTR(lpm, S_IRUGO | S_IWUSR, dsicm_lpm_show, dsicm_lpm_store);
+static DEVICE_ATTR(dimming, S_IRUGO | S_IWUSR, dsicm_dimming_show, dsicm_dimming_store);
+static DEVICE_ATTR(hbm, S_IRUGO | S_IWUSR, dsicm_hbm_show, dsicm_hbm_store);
+
+/* The N9's panel: mce finds these at /sys/class/backlight/display0/device/ */
+static struct attribute *dsicm_pyrenees_attrs[] = {
+	&dev_attr_lpm.attr,
+	&dev_attr_dimming.attr,
+	&dev_attr_hbm.attr,
+	NULL,
+};
+
+static const struct attribute_group dsicm_pyrenees_attr_group = {
+	.attrs = dsicm_pyrenees_attrs,
+};
+
 static void dsicm_hw_reset(struct panel_drv_data *ddata)
 {
 	/*
@@ -764,14 +952,23 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 			goto err;
 	}
 
-	r = dsicm_dcs_write_1(ddata, DCS_BRIGHTNESS, 0xff);
+	/* The backlight's brightness, as stock */
+	r = dsicm_dcs_write_1(ddata, DCS_BRIGHTNESS,
+			      ddata->bldev ? ddata->bldev->props.brightness : 0xff);
 	if (r)
 		goto err;
 
-	r = dsicm_dcs_write_1(ddata, DCS_CTRL_DISPLAY,
-			(1<<2) | (1<<5));	/* BL | BCTRL */
+	r = dsicm_write_ctrl_display(ddata);
 	if (r)
 		goto err;
+
+	if (ddata->pyrenees) {
+		r = dsicm_dcs_write_1(ddata, DCS_WRITE_CABC, ddata->acl);
+		if (!r)
+			r = dsicm_write_lpm(ddata);
+		if (r)
+			goto err;
+	}
 
 	r = dsicm_dcs_write_1(ddata, MIPI_DCS_SET_PIXEL_FORMAT,
 		MIPI_DCS_PIXEL_FMT_24BIT);
@@ -1127,9 +1324,9 @@ static irqreturn_t dsicm_te_isr(int irq, void *data)
 	int old;
 	int r;
 
-	/* the frame period, from the TE line */
+	/* the frame period, from the TE line (longer in low power mode) */
 	ddata->te_last = now;
-	if (frame > 10000 && frame < 40000)
+	if (frame > 10000 && frame < (ddata->lpm ? 100000 : 40000))
 		ddata->frame_us = frame;
 
 	if (dsicm_split(ddata)) {
@@ -1182,6 +1379,8 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 	dev_dbg(&ddata->pdev->dev, "update %d, %d, %d x %d\n", x, y, w, h);
 
 	mutex_lock(&ddata->lock);
+	if (ddata->lpm_pending)
+		mod_delayed_work(system_wq, &ddata->lpm_work, msecs_to_jiffies(DSICM_LPM_DELAY_MS));
 	in->ops.dsi->bus_lock(in);
 
 	r = dsicm_wake_up(ddata);
@@ -1610,15 +1809,23 @@ static int dsicm_probe(struct platform_device *pdev)
 	}
 
 	INIT_DELAYED_WORK(&ddata->ulps_work, dsicm_ulps_work);
+	INIT_DELAYED_WORK(&ddata->lpm_work, dsicm_lpm_work);
 
 	dsicm_hw_reset(ddata);
+
+	/*
+	 * Brightness by DCS unless the DT names a backlight. It registers under the panel's alias,
+	 * display0 on the N9 as on stock, which Harmattan's mce looks for.
+	 */
+	ddata->use_dsi_backlight = !of_property_present(dev->of_node, "backlight");
+	ddata->pyrenees = of_device_is_compatible(dev->of_node, "omapdss,nokia,pyrenees");
 
 	if (ddata->use_dsi_backlight) {
 		memset(&props, 0, sizeof(struct backlight_properties));
 		props.max_brightness = 255;
 
 		props.type = BACKLIGHT_RAW;
-		bldev = backlight_device_register(dev_name(dev),
+		bldev = backlight_device_register(dssdev->alias,
 				dev, ddata, &dsicm_bl_ops, &props);
 		if (IS_ERR(bldev)) {
 			r = PTR_ERR(bldev);
@@ -1634,6 +1841,11 @@ static int dsicm_probe(struct platform_device *pdev)
 	}
 
 	r = sysfs_create_group(&dev->kobj, &dsicm_attr_group);
+	if (!r && ddata->pyrenees) {
+		r = sysfs_create_group(&dev->kobj, &dsicm_pyrenees_attr_group);
+		if (r)
+			sysfs_remove_group(&dev->kobj, &dsicm_attr_group);
+	}
 	if (r) {
 		dev_err(dev, "failed to create sysfs files\n");
 		goto err_sysfs_create;
@@ -1662,6 +1874,9 @@ static void dsicm_remove(struct platform_device *pdev)
 	dsicm_disconnect(dssdev);
 
 	sysfs_remove_group(&pdev->dev.kobj, &dsicm_attr_group);
+	if (ddata->pyrenees)
+		sysfs_remove_group(&pdev->dev.kobj, &dsicm_pyrenees_attr_group);
+	cancel_delayed_work_sync(&ddata->lpm_work);
 
 	bldev = ddata->bldev;
 	if (bldev != NULL) {
