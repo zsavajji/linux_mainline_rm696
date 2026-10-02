@@ -94,6 +94,9 @@ struct mgr_priv_data {
 	/* If true, a display is enabled using this manager */
 	bool enabled;
 
+	/* A frame written in two halves (dss_mgr_start_update_region) between its halves */
+	bool region_open;
+
 	bool extra_info_dirty;
 	bool shadow_extra_info_dirty;
 
@@ -906,6 +909,7 @@ static void dss_mgr_start_update_compat(struct omap_overlay_manager *mgr)
 	spin_lock_irqsave(&data_lock, flags);
 
 	WARN_ON(mp->updating);
+	mp->region_open = false;
 
 	r = dss_check_settings(mgr);
 	if (r) {
@@ -930,6 +934,102 @@ static void dss_mgr_start_update_compat(struct omap_overlay_manager *mgr)
 }
 
 static void dss_apply_irq_handler(void *data, u32 mask);
+static void dss_register_vsync_isr(void);
+
+/* The overlays as the first half of a split frame found them, for its second half */
+static struct {
+	struct omap_overlay_info info;
+	bool enabled;
+} region_ovl[MAX_DSS_OVERLAYS];
+
+/*
+ * A manual update of the columns [x, x + w) only, for a DSI command-mode panel written in two halves
+ * (panel-dsi-cm in landscape), as Nokia's omapdss did for the N9 ("partial planes"): the manager
+ * outputs w columns, and each enabled overlay is set up clipped to them, or left out of this update.
+ * Both halves show one frame: the first half latches the overlays and keeps a copy for the second,
+ * and the manager counts as updating until the second is done, so a flip made meanwhile (a pan) waits
+ * for the next frame and the flip notifications (dss_run_notifiers) come once the frame is out, as
+ * with Nokia's omap_dss_lock_cache(). The overlays' own settings are written again next update.
+ * ponytail: only unrotated, unmirrored, unscaled overlays are cut (the GFX plane X draws in); any
+ * other overlay shows only in the half it lies wholly in. Video playback (Xv) will need scaled cuts.
+ */
+static void dss_mgr_start_update_region_compat(struct omap_overlay_manager *mgr, u16 x, u16 w,
+					       bool first)
+{
+	struct mgr_priv_data *mp = get_mgr_priv(mgr);
+	struct omap_video_timings t;
+	struct omap_overlay *ovl;
+	unsigned long flags;
+
+	spin_lock_irqsave(&data_lock, flags);
+
+	if (first) {
+		WARN_ON(mp->updating);
+
+		if (dss_check_settings(mgr)) {
+			DSSERR("cannot start manual update: illegal configuration\n");
+			spin_unlock_irqrestore(&data_lock, flags);
+			return;
+		}
+
+		dss_mgr_write_regs(mgr);
+		dss_mgr_write_regs_extra(mgr);
+
+		list_for_each_entry(ovl, &mgr->overlays, list) {
+			region_ovl[ovl->id].info = get_ovl_priv(ovl)->info;
+			region_ovl[ovl->id].enabled = get_ovl_priv(ovl)->enabled;
+		}
+		mp->region_open = true;
+	} else {
+		mp->region_open = false;
+	}
+
+	t = mp->timings;
+	t.x_res = w;
+	dispc_mgr_set_timings(mgr->id, &t);
+	mp->extra_info_dirty = true;	/* the full size again for the next update */
+
+	list_for_each_entry(ovl, &mgr->overlays, list) {
+		struct ovl_priv_data *op = get_ovl_priv(ovl);
+		struct omap_overlay_info oi = region_ovl[ovl->id].info;
+		u16 ow = oi.out_width ? oi.out_width : oi.width;
+		u16 x0 = max_t(u16, oi.pos_x, x);
+		u16 x1 = min_t(u16, oi.pos_x + ow, x + w);
+		bool cut = ow == oi.width && oi.rotation == OMAP_DSS_ROT_0 && !oi.mirror;
+		bool on = false;
+
+		if (!region_ovl[ovl->id].enabled)
+			continue;
+
+		if (x0 < x1 && (cut || (x0 == oi.pos_x && x1 == oi.pos_x + ow))) {
+			if (cut) {
+				oi.paddr += (x0 - oi.pos_x) *
+					    (dispc_ovl_color_mode_bpp(oi.color_mode) / 8);
+				oi.width = x1 - x0;
+				oi.out_width = 0;
+			}
+			oi.pos_x = x0 - x;
+			on = !dispc_ovl_setup(ovl->id, &oi,
+					dss_ovl_use_replication(mp->lcd_config, oi.color_mode),
+					&t, false);
+		}
+		dispc_ovl_enable(ovl->id, on);
+		op->info_dirty = true;
+		op->extra_info_dirty = true;
+	}
+
+	mp->updating = true;
+
+	if (!dss_data.irq_enabled && need_isr())
+		dss_register_vsync_isr();
+
+	if (first)
+		dss_run_notifiers();
+
+	dispc_mgr_enable_sync(mgr->id);
+
+	spin_unlock_irqrestore(&data_lock, flags);
+}
 
 static void dss_register_vsync_isr(void)
 {
@@ -988,7 +1088,8 @@ static void dss_apply_irq_handler(void *data, u32 mask)
 		if (!mp->enabled)
 			continue;
 
-		mp->updating = dispc_mgr_is_enabled(i);
+		/* still updating between the two halves of a split frame */
+		mp->updating = dispc_mgr_is_enabled(i) || mp->region_open;
 
 		if (!mgr_manual_update(mgr)) {
 			bool was_busy = mp->busy;
@@ -1676,6 +1777,7 @@ static const struct dss_mgr_ops apply_mgr_ops = {
 	.connect = dss_mgr_connect_compat,
 	.disconnect = dss_mgr_disconnect_compat,
 	.start_update = dss_mgr_start_update_compat,
+	.start_update_region = dss_mgr_start_update_region_compat,
 	.enable = dss_mgr_enable_compat,
 	.disable = dss_mgr_disable_compat,
 	.set_timings = dss_mgr_set_timings_compat,

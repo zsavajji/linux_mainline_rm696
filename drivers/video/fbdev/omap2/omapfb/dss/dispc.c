@@ -4057,3 +4057,8 @@ void dispc_uninit_platform_driver(void)
 {
 	platform_driver_unregister(&omap_dispchw_driver);
 }
+
+int dispc_ovl_color_mode_bpp(enum omap_color_mode color_mode)
+{
+	return color_mode_to_bpp(color_mode);
+}

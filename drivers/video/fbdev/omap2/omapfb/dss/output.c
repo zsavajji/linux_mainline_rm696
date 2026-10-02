@@ -242,6 +242,12 @@ void dss_mgr_start_update(struct omap_overlay_manager *mgr)
 }
 EXPORT_SYMBOL(dss_mgr_start_update);
 
+void dss_mgr_start_update_region(struct omap_overlay_manager *mgr, u16 x, u16 w, bool first)
+{
+	dss_mgr_ops->start_update_region(mgr, x, w, first);
+}
+EXPORT_SYMBOL(dss_mgr_start_update_region);
+
 int dss_mgr_register_framedone_handler(struct omap_overlay_manager *mgr,
 		void (*handler)(void *), void *data)
 {

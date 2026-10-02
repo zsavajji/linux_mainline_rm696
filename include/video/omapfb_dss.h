@@ -576,6 +576,12 @@ struct omapdss_dsi_ops {
 
 	int (*update)(struct omap_dss_device *dssdev, int channel,
 			void (*callback)(int, void *), void *data);
+	/*
+	 * The columns [x, x + w) only, for a panel written in two halves (panel-dsi-cm): first is the
+	 * frame's first half, the second shows the same frame
+	 */
+	int (*update_region)(struct omap_dss_device *dssdev, int channel,
+			u16 x, u16 w, bool first, void (*callback)(int, void *), void *data);
 
 	void (*bus_lock)(struct omap_dss_device *dssdev);
 	void (*bus_unlock)(struct omap_dss_device *dssdev);

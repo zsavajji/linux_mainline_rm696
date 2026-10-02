@@ -13,6 +13,7 @@
 #include <linux/err.h>
 #include <linux/fb.h>
 #include <linux/gpio/consumer.h>
+#include <linux/hrtimer.h>
 #include <video/of_display_timing.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
@@ -76,6 +77,31 @@ struct panel_drv_data {
 	int channel;
 
 	struct delayed_work te_timeout_work;
+
+	/*
+	 * Landscape through the panel's row/column exchange (rotate odd) with the TE line: each update
+	 * in two halves, see dsicm_split_half()
+	 */
+	atomic_t split_state;
+	struct hrtimer split_timer;
+	struct work_struct split_work;
+	ktime_t te_last;
+	u32 frame_us;
+	/* each half transfer, last and longest (us), in sysfs split_timing */
+	ktime_t split_t0;
+	u32 split_us[2], split_max[2];
+	/*
+	 * Calibration, in sysfs: the right half first instead of stock's left (rotate 1), and the
+	 * first half's start after TE (0: half the TE period)
+	 */
+	bool split_right_first;
+	u32 split_mid_us;
+	/*
+	 * Stock's scheme for the N9's SMD Pyrenees panel (id fe): TE at mid-scan, the first half from
+	 * TE, the second from the timer (sysfs split_reverse); frame_rows is the panel's frame height
+	 */
+	bool split_reverse;
+	u16 frame_rows;
 
 	bool intro_printed;
 
@@ -532,7 +558,103 @@ static ssize_t dsicm_show_ulps_timeout(struct device *dev,
 	return sysfs_emit(buf, "%u\n", t);
 }
 
+static ssize_t dsicm_split_timing_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+
+	return sysfs_emit(buf, "te %u half1 %u max %u half2 %u max %u\n", ddata->frame_us,
+			  ddata->split_us[0], ddata->split_max[0],
+			  ddata->split_us[1], ddata->split_max[1]);
+}
+
+static ssize_t dsicm_split_right_first_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+
+	return sysfs_emit(buf, "%d\n", ddata->split_right_first);
+}
+
+static ssize_t dsicm_split_right_first_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+	bool v;
+	int r = kstrtobool(buf, &v);
+
+	if (r)
+		return r;
+	ddata->split_right_first = v;
+	return count;
+}
+
+static ssize_t dsicm_split_mid_us_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+
+	return sysfs_emit(buf, "%u\n", ddata->split_mid_us);
+}
+
+static ssize_t dsicm_split_mid_us_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+	unsigned int v;
+	int r = kstrtouint(buf, 0, &v);
+
+	if (r)
+		return r;
+	if (v > 40000)
+		return -EINVAL;
+	ddata->split_mid_us = v;
+	return count;
+}
+
+static int _dsicm_set_tear_scanline(struct panel_drv_data *ddata);
+
+static ssize_t dsicm_split_reverse_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+
+	return sysfs_emit(buf, "%d\n", ddata->split_reverse);
+}
+
+static ssize_t dsicm_split_reverse_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = platform_get_drvdata(to_platform_device(dev));
+	struct omap_dss_device *in = ddata->in;
+	bool v;
+	int r = kstrtobool(buf, &v);
+
+	if (r)
+		return r;
+
+	mutex_lock(&ddata->lock);
+	ddata->split_reverse = v;
+	if (ddata->enabled) {
+		in->ops.dsi->bus_lock(in);
+		r = dsicm_wake_up(ddata);
+		if (!r && ddata->te_enabled)
+			r = _dsicm_set_tear_scanline(ddata);
+		in->ops.dsi->bus_unlock(in);
+	}
+	mutex_unlock(&ddata->lock);
+
+	return r ? r : count;
+}
+
 static DEVICE_ATTR(num_dsi_errors, S_IRUGO, dsicm_num_errors_show, NULL);
+static DEVICE_ATTR(split_reverse, S_IRUGO | S_IWUSR, dsicm_split_reverse_show,
+		   dsicm_split_reverse_store);
+static DEVICE_ATTR(split_right_first, S_IRUGO | S_IWUSR, dsicm_split_right_first_show,
+		   dsicm_split_right_first_store);
+static DEVICE_ATTR(split_mid_us, S_IRUGO | S_IWUSR, dsicm_split_mid_us_show,
+		   dsicm_split_mid_us_store);
+static DEVICE_ATTR(split_timing, S_IRUGO, dsicm_split_timing_show, NULL);
 static DEVICE_ATTR(hw_revision, S_IRUGO, dsicm_hw_revision_show, NULL);
 static DEVICE_ATTR(ulps, S_IRUGO | S_IWUSR,
 		dsicm_show_ulps, dsicm_store_ulps);
@@ -544,6 +666,10 @@ static struct attribute *dsicm_attrs[] = {
 	&dev_attr_hw_revision.attr,
 	&dev_attr_ulps.attr,
 	&dev_attr_ulps_timeout.attr,
+	&dev_attr_split_timing.attr,
+	&dev_attr_split_right_first.attr,
+	&dev_attr_split_mid_us.attr,
+	&dev_attr_split_reverse.attr,
 	NULL,
 };
 
@@ -841,12 +967,179 @@ static void dsicm_framedone_cb(int err, void *data)
 	in->ops.dsi->bus_unlock(ddata->in);
 }
 
+enum { DSICM_SPLIT_NONE, DSICM_HALF1_WAIT, DSICM_HALF1_ONGOING, DSICM_HALF2_WAIT,
+	DSICM_HALF2_ONGOING };
+
+static bool dsicm_split(struct panel_drv_data *ddata)
+{
+	return ddata->te_enabled && ddata->ext_te_gpio && (ddata->rotate & 1);
+}
+
+/*
+ * The halves: in landscape each update is written across the panel's columns while it scans its
+ * rows, so a whole frame always crosses the scan (a diagonal tear). The N9's stock driver
+ * (panel-nokia-dsi, PND_UPD_MODE_LR/RL) writes each half of the landscape frame while the scan is in
+ * the panel's other half: the first half from mid-frame, the second at the next TE. The mid-frame
+ * timer runs from every TE, so an update asked for before mid-frame goes out in that frame.
+ * Rotate 1 (address mode MV|MX): the left half first; rotate 3: the right half.
+ */
+static void dsicm_split_half(struct panel_drv_data *ddata, bool first, u16 *x, u16 *w)
+{
+	u16 width = ddata->timings.x_res, half = (width / 2) & ~1;
+
+	if (first == ((ddata->rotate == 1) != ddata->split_right_first)) {
+		*x = 0;
+		*w = half;
+	} else {
+		*x = half;
+		*w = width - half;
+	}
+}
+
+static void dsicm_split_fail(struct panel_drv_data *ddata)
+{
+	dev_err(&ddata->pdev->dev, "split update failed\n");
+	atomic_set(&ddata->split_state, DSICM_SPLIT_NONE);
+	cancel_delayed_work(&ddata->te_timeout_work);
+	ddata->in->ops.dsi->bus_unlock(ddata->in);
+}
+
+static void dsicm_split_record(struct panel_drv_data *ddata, int half)
+{
+	u32 us = ktime_us_delta(ktime_get(), ddata->split_t0);
+
+	ddata->split_us[half] = us;
+	ddata->split_max[half] = max(ddata->split_max[half], us);
+}
+
+static void dsicm_split_done2(int err, void *data)
+{
+	struct panel_drv_data *ddata = data;
+
+	if (err) {
+		dsicm_split_fail(ddata);
+		return;
+	}
+	dsicm_split_record(ddata, 1);
+	atomic_set(&ddata->split_state, DSICM_SPLIT_NONE);
+	cancel_delayed_work(&ddata->te_timeout_work);
+	ddata->in->ops.dsi->bus_unlock(ddata->in);
+}
+
+/* After the first half: the second half's window (a DCS write, which can sleep), then its TE */
+static void dsicm_split_work(struct work_struct *work)
+{
+	struct panel_drv_data *ddata = container_of(work, struct panel_drv_data, split_work);
+	u16 x, w;
+
+	dsicm_split_half(ddata, false, &x, &w);
+	if (dsicm_set_update_window(ddata, x, 0, w, ddata->timings.y_res)) {
+		dsicm_split_fail(ddata);
+		return;
+	}
+	atomic_set(&ddata->split_state, DSICM_HALF2_WAIT);
+}
+
+static void dsicm_split_done1(int err, void *data)
+{
+	struct panel_drv_data *ddata = data;
+
+	if (err) {
+		dsicm_split_fail(ddata);
+		return;
+	}
+	dsicm_split_record(ddata, 0);
+	/* high priority: late, the second half misses its TE and the frame takes one more */
+	queue_work(system_highpri_wq, &ddata->split_work);
+}
+
+static void dsicm_split_start1(struct panel_drv_data *ddata)
+{
+	struct omap_dss_device *in = ddata->in;
+	u16 x, w;
+
+	if (atomic_cmpxchg(&ddata->split_state, DSICM_HALF1_WAIT, DSICM_HALF1_ONGOING) ==
+	    DSICM_HALF1_WAIT) {
+		dsicm_split_half(ddata, true, &x, &w);
+		ddata->split_t0 = ktime_get();
+		if (in->ops.dsi->update_region(in, ddata->channel, x, w, true,
+					       dsicm_split_done1, ddata))
+			dsicm_split_fail(ddata);
+	}
+}
+
+static void dsicm_split_start2(struct panel_drv_data *ddata)
+{
+	struct omap_dss_device *in = ddata->in;
+	u16 x, w;
+
+	if (atomic_cmpxchg(&ddata->split_state, DSICM_HALF2_WAIT, DSICM_HALF2_ONGOING) ==
+	    DSICM_HALF2_WAIT) {
+		dsicm_split_half(ddata, false, &x, &w);
+		ddata->split_t0 = ktime_get();
+		if (in->ops.dsi->update_region(in, ddata->channel, x, w, false,
+					       dsicm_split_done2, ddata))
+			dsicm_split_fail(ddata);
+	}
+}
+
+/* The TE pulse at mid-scan in reverse mode (stock's for the SMD Pyrenees), else at the frame start */
+static int _dsicm_set_tear_scanline(struct panel_drv_data *ddata)
+{
+	struct omap_dss_device *in = ddata->in;
+	u16 line = ddata->split_reverse && ddata->frame_rows ? ddata->frame_rows / 2 : 0;
+	u8 buf[3] = { MIPI_DCS_SET_TEAR_SCANLINE, line >> 8, line & 0xff };
+
+	return in->ops.dsi->dcs_write(in, ddata->channel, buf, sizeof(buf));
+}
+
+/*
+ * The timer: half the TE period; in reverse mode, just past it (52%: the scan has left the second
+ * half's rows), so the second half is out before the next TE and updates keep up with 60 frames a
+ * second. It follows the measured TE period, which the SMD Pyrenees stretches in ACL. Stock used a
+ * fixed (1/46 s less the blanking) / 2, which ends a 60 Hz update just after the next TE (updates
+ * at 30 a second). sysfs split_mid_us overrides it (0.87 of a half frame measured tear-free).
+ */
+static u32 dsicm_split_delay(struct panel_drv_data *ddata)
+{
+	if (ddata->split_mid_us)
+		return ddata->split_mid_us;
+	return ddata->split_reverse ? ddata->frame_us * 52 / 100 : ddata->frame_us / 2;
+}
+
+static enum hrtimer_restart dsicm_split_timer(struct hrtimer *timer)
+{
+	struct panel_drv_data *ddata = container_of(timer, struct panel_drv_data, split_timer);
+
+	if (ddata->split_reverse)
+		dsicm_split_start2(ddata);
+	else
+		dsicm_split_start1(ddata);
+	return HRTIMER_NORESTART;
+}
+
 static irqreturn_t dsicm_te_isr(int irq, void *data)
 {
 	struct panel_drv_data *ddata = data;
 	struct omap_dss_device *in = ddata->in;
+	ktime_t now = ktime_get();
+	s64 frame = ktime_us_delta(now, ddata->te_last);
 	int old;
 	int r;
+
+	/* the frame period, from the TE line */
+	ddata->te_last = now;
+	if (frame > 10000 && frame < 40000)
+		ddata->frame_us = frame;
+
+	if (dsicm_split(ddata)) {
+		hrtimer_start(&ddata->split_timer, us_to_ktime(dsicm_split_delay(ddata)),
+			      HRTIMER_MODE_REL);
+		if (ddata->split_reverse)
+			dsicm_split_start1(ddata);
+		else
+			dsicm_split_start2(ddata);
+	}
 
 	old = atomic_cmpxchg(&ddata->do_update, 1, 0);
 
@@ -875,6 +1168,7 @@ static void dsicm_te_timeout_work_callback(struct work_struct *work)
 	dev_err(&ddata->pdev->dev, "TE not received for 250ms!\n");
 
 	atomic_set(&ddata->do_update, 0);
+	atomic_set(&ddata->split_state, DSICM_SPLIT_NONE);
 	in->ops.dsi->bus_unlock(in);
 }
 
@@ -897,6 +1191,20 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 	if (!ddata->enabled) {
 		r = 0;
 		goto err;
+	}
+
+	if (dsicm_split(ddata)) {
+		u16 hx, hw;
+
+		dsicm_split_half(ddata, true, &hx, &hw);
+		r = dsicm_set_update_window(ddata, hx, 0, hw, ddata->timings.y_res);
+		if (r)
+			goto err;
+		schedule_delayed_work(&ddata->te_timeout_work, msecs_to_jiffies(250));
+		atomic_set(&ddata->split_state, DSICM_HALF1_WAIT);
+		/* note: no bus_unlock here. unlock is in dsicm_split_done2 */
+		mutex_unlock(&ddata->lock);
+		return 0;
 	}
 
 	/* XXX no need to send this every frame, but dsi break if not done */
@@ -952,6 +1260,10 @@ static int _dsicm_enable_te(struct panel_drv_data *ddata, bool enable)
 		r = dsicm_dcs_write_1(ddata, MIPI_DCS_SET_TEAR_ON, 0);
 	else
 		r = dsicm_dcs_write_0(ddata, MIPI_DCS_SET_TEAR_OFF);
+
+	/* landscape updates go in halves, timed from the TE line (see dsicm_split_half) */
+	if (!r && enable && (ddata->rotate & 1))
+		r = _dsicm_set_tear_scanline(ddata);
 
 	if (!ddata->ext_te_gpio)
 		in->ops.dsi->enable_te(in, enable);
@@ -1212,6 +1524,7 @@ static int dsicm_probe(struct platform_device *pdev)
 		 * exchange, as the N9's stock driver does (its rotate 1) */
 		ddata->x_offset = dt.hback_porch.typ;
 		ddata->y_offset = dt.vback_porch.typ;
+		ddata->frame_rows = dt.vback_porch.typ + dt.vactive.typ + dt.vfront_porch.typ;
 		if (dt.vback_porch.typ || dt.vfront_porch.typ) {
 			ddata->partial_start = dt.vback_porch.typ;
 			ddata->partial_rows = dt.vactive.typ;
@@ -1287,6 +1600,11 @@ static int dsicm_probe(struct platform_device *pdev)
 
 		INIT_DEFERRABLE_WORK(&ddata->te_timeout_work,
 					dsicm_te_timeout_work_callback);
+		INIT_WORK(&ddata->split_work, dsicm_split_work);
+		hrtimer_setup(&ddata->split_timer, dsicm_split_timer, CLOCK_MONOTONIC,
+			      HRTIMER_MODE_REL);
+		ddata->frame_us = 16667;
+		ddata->split_reverse = true;
 
 		dev_dbg(dev, "Using GPIO TE\n");
 	}

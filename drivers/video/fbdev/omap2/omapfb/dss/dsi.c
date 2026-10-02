@@ -330,6 +330,8 @@ struct dsi_data {
 	struct dsi_isr_tables isr_tables_copy;
 
 	int update_channel;
+	u16 update_x, update_w;	/* w 0: the whole frame */
+	bool update_first;
 #ifdef DSI_PERF_MEASURE
 	unsigned update_bytes;
 #endif
@@ -3914,7 +3916,7 @@ static void dsi_update_screen_dispc(struct platform_device *dsidev)
 	int r;
 	const unsigned channel = dsi->update_channel;
 	const unsigned line_buf_size = dsi->line_buffer_size;
-	u16 w = dsi->timings.x_res;
+	u16 w = dsi->update_w ? dsi->update_w : dsi->timings.x_res;
 	u16 h = dsi->timings.y_res;
 
 	DSSDBG("dsi_update_screen_dispc(%dx%d)\n", w, h);
@@ -3965,9 +3967,15 @@ static void dsi_update_screen_dispc(struct platform_device *dsidev)
 		msecs_to_jiffies(250));
 	BUG_ON(r == 0);
 
-	dss_mgr_set_timings(mgr, &dsi->timings);
+	/* not for a split frame second half: the manager is still updating, with these timings */
+	if (!dsi->update_w || dsi->update_first)
+		dss_mgr_set_timings(mgr, &dsi->timings);
 
-	dss_mgr_start_update(mgr);
+	if (dsi->update_w)
+		dss_mgr_start_update_region(mgr, dsi->update_x, dsi->update_w,
+					    dsi->update_first);
+	else
+		dss_mgr_start_update(mgr);
 
 	if (dsi->te_enabled) {
 		/* disable LP_RX_TO, so that we can receive TE.  Time to wait
@@ -4047,6 +4055,7 @@ static int dsi_update(struct omap_dss_device *dssdev, int channel,
 	dsi_perf_mark_setup(dsidev);
 
 	dsi->update_channel = channel;
+	dsi->update_w = 0;
 
 	dsi->framedone_callback = callback;
 	dsi->framedone_data = data;
@@ -4055,6 +4064,27 @@ static int dsi_update(struct omap_dss_device *dssdev, int channel,
 	dsi->update_bytes = dsi->timings.x_res * dsi->timings.y_res *
 		dsi_get_pixel_size(dsi->pix_fmt) / 8;
 #endif
+	dsi_update_screen_dispc(dsidev);
+
+	return 0;
+}
+
+static int dsi_update_region(struct omap_dss_device *dssdev, int channel,
+		u16 x, u16 w, bool first, void (*callback)(int, void *), void *data)
+{
+	struct platform_device *dsidev = dsi_get_dsidev_from_dssdev(dssdev);
+	struct dsi_data *dsi = dsi_get_dsidrv_data(dsidev);
+
+	dsi_perf_mark_setup(dsidev);
+
+	dsi->update_channel = channel;
+	dsi->update_x = x;
+	dsi->update_w = w;
+	dsi->update_first = first;
+
+	dsi->framedone_callback = callback;
+	dsi->framedone_data = data;
+
 	dsi_update_screen_dispc(dsidev);
 
 	return 0;
@@ -5023,6 +5053,7 @@ static const struct omapdss_dsi_ops dsi_ops = {
 	.disable_video_output = dsi_disable_video_output,
 
 	.update = dsi_update,
+	.update_region = dsi_update_region,
 
 	.enable_te = dsi_enable_te,
 

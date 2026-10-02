@@ -420,6 +420,7 @@ int dispc_ovl_check(enum omap_plane plane, enum omap_channel channel,
 		int *x_predecim, int *y_predecim);
 
 int dispc_ovl_enable(enum omap_plane plane, bool enable);
+int dispc_ovl_color_mode_bpp(enum omap_color_mode color_mode);
 bool dispc_ovl_enabled(enum omap_plane plane);
 void dispc_ovl_set_channel_out(enum omap_plane plane,
 		enum omap_channel channel);
@@ -485,6 +486,7 @@ struct dss_mgr_ops {
 		struct omap_dss_device *dst);
 
 	void (*start_update)(struct omap_overlay_manager *mgr);
+	void (*start_update_region)(struct omap_overlay_manager *mgr, u16 x, u16 w, bool first);
 	int (*enable)(struct omap_overlay_manager *mgr);
 	void (*disable)(struct omap_overlay_manager *mgr);
 	void (*set_timings)(struct omap_overlay_manager *mgr,
@@ -511,6 +513,7 @@ void dss_mgr_set_lcd_config(struct omap_overlay_manager *mgr,
 int dss_mgr_enable(struct omap_overlay_manager *mgr);
 void dss_mgr_disable(struct omap_overlay_manager *mgr);
 void dss_mgr_start_update(struct omap_overlay_manager *mgr);
+void dss_mgr_start_update_region(struct omap_overlay_manager *mgr, u16 x, u16 w, bool first);
 int dss_mgr_register_framedone_handler(struct omap_overlay_manager *mgr,
 		void (*handler)(void *), void *data);
 void dss_mgr_unregister_framedone_handler(struct omap_overlay_manager *mgr,
