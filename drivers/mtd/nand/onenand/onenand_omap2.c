@@ -456,6 +456,11 @@ static void omap2_onenand_shutdown(struct platform_device *pdev)
 	memset((__force void *)c->onenand.base, 0, ONENAND_BUFRAM_SIZE);
 }
 
+static int omap2_onenand_no_erase(struct mtd_info *mtd, struct erase_info *instr)
+{
+	return -EROFS;
+}
+
 static int omap2_onenand_probe(struct platform_device *pdev)
 {
 	u32 val;
@@ -523,6 +528,21 @@ static int omap2_onenand_probe(struct platform_device *pdev)
 	r = onenand_scan(&c->mtd, 1);
 	if (r < 0)
 		goto err_release_dma;
+
+	/*
+	 * This test kernel never changes the phone's OneNAND (NOLO, the stock kernel, CAL): reads only.
+	 * The MTD stays "writeable", since mtdchar refuses read-write opens of a read-only one and
+	 * Harmattan's libcal opens CAL read-write. Instead the operations that change the flash go (the
+	 * MTD core then fails writes, bad-block marks, OTP writes and locks) and erase fails.
+	 */
+	c->mtd._erase = omap2_onenand_no_erase;
+	c->mtd._write_oob = NULL;
+	c->mtd._panic_write = NULL;
+	c->mtd._block_markbad = NULL;
+	c->mtd._write_user_prot_reg = NULL;
+	c->mtd._lock_user_prot_reg = NULL;
+	c->mtd._lock = NULL;
+	c->mtd._unlock = NULL;
 
 	freq = omap2_onenand_get_freq(c->onenand.version_id);
 	if (freq > 0) {
