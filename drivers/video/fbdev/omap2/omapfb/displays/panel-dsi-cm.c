@@ -20,6 +20,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_qos.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
@@ -121,6 +122,20 @@ struct panel_drv_data {
 	struct delayed_work lpm_work;
 	bool dimming;
 	u8 hbm, acl;
+
+	/*
+	 * Frame pacing, in sysfs update_stats: frames by the TE periods since the one before as they
+	 * start on the panel (1, 2, 3, 4 or more; 1 is 60 a second) and pauses (over 100 ms); update
+	 * requests by when they come after TE; first halves started late (dsicm_split_late_start).
+	 * And the CPU's idle exit latency limit while the panel is on outside low power mode (sysfs
+	 * idle_latency_us, 0 = none), stock's PM optimizer's display rule: 6 ms, which keeps CORE out
+	 * of retention mid-animation
+	 */
+	ktime_t stats_last;
+	u32 stats[5], phase[4], late_starts;
+	u32 split_late_us;
+	struct pm_qos_request idle_qos;
+	u32 idle_latency_us;
 };
 
 #define to_panel_data(p) container_of(p, struct panel_drv_data, dssdev)
@@ -527,6 +542,20 @@ static int dsicm_apply(struct panel_drv_data *ddata, int (*write)(struct panel_d
 	return r;
 }
 
+static void dsicm_set_idle_qos(struct panel_drv_data *ddata)
+{
+	bool want = ddata->enabled && !ddata->lpm && ddata->idle_latency_us;
+
+	if (!want) {
+		if (cpu_latency_qos_request_active(&ddata->idle_qos))
+			cpu_latency_qos_remove_request(&ddata->idle_qos);
+	} else if (cpu_latency_qos_request_active(&ddata->idle_qos)) {
+		cpu_latency_qos_update_request(&ddata->idle_qos, ddata->idle_latency_us);
+	} else {
+		cpu_latency_qos_add_request(&ddata->idle_qos, ddata->idle_latency_us);
+	}
+}
+
 static void dsicm_lpm_work(struct work_struct *work)
 {
 	struct panel_drv_data *ddata = container_of(work, struct panel_drv_data, lpm_work.work);
@@ -536,6 +565,7 @@ static void dsicm_lpm_work(struct work_struct *work)
 		ddata->lpm_pending = false;
 		ddata->lpm = true;
 		dsicm_apply(ddata, dsicm_write_lpm);
+		dsicm_set_idle_qos(ddata);
 	}
 	mutex_unlock(&ddata->lock);
 }
@@ -564,6 +594,7 @@ static ssize_t dsicm_lpm_store(struct device *dev, struct device_attribute *attr
 	} else if (ddata->lpm) {
 		ddata->lpm = false;
 		r = dsicm_apply(ddata, dsicm_write_lpm);
+		dsicm_set_idle_qos(ddata);
 	}
 	mutex_unlock(&ddata->lock);
 
@@ -833,7 +864,99 @@ static DEVICE_ATTR(ulps, S_IRUGO | S_IWUSR,
 static DEVICE_ATTR(ulps_timeout, S_IRUGO | S_IWUSR,
 		dsicm_show_ulps_timeout, dsicm_store_ulps_timeout);
 
+static void dsicm_update_stats(struct panel_drv_data *ddata)
+{
+	ktime_t now = ktime_get();
+	s64 us = ktime_us_delta(now, ddata->stats_last);
+
+	ddata->stats_last = now;
+	if (us > 100000)
+		ddata->stats[0]++;
+	else
+		ddata->stats[clamp_t(u32, DIV_ROUND_CLOSEST((u32)us, ddata->frame_us ?: 16667), 1, 4)]++;
+}
+
+static ssize_t dsicm_update_stats_show(struct device *dev, struct device_attribute *attr,
+				       char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	u32 *n = ddata->stats;
+
+	u32 *p = ddata->phase;
+
+	return sysfs_emit(buf, "1:%u 2:%u 3:%u 4+:%u pauses:%u | requests at TE+ 0-1ms:%u 1-2ms:%u "
+			  "2-15ms:%u 15ms+:%u | late starts:%u\n", n[1], n[2], n[3], n[4], n[0],
+			  p[0], p[1], p[2], p[3], ddata->late_starts);
+}
+
+/* Any write clears them */
+static ssize_t dsicm_update_stats_store(struct device *dev, struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	mutex_lock(&ddata->lock);
+	memset(ddata->stats, 0, sizeof(ddata->stats));
+	memset(ddata->phase, 0, sizeof(ddata->phase));
+	ddata->late_starts = 0;
+	mutex_unlock(&ddata->lock);
+	return count;
+}
+
+static ssize_t dsicm_idle_latency_us_show(struct device *dev, struct device_attribute *attr,
+					  char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ddata->idle_latency_us);
+}
+
+static ssize_t dsicm_idle_latency_us_store(struct device *dev, struct device_attribute *attr,
+					   const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	u32 t;
+	int r;
+
+	r = kstrtou32(buf, 0, &t);
+	if (r)
+		return r;
+
+	mutex_lock(&ddata->lock);
+	ddata->idle_latency_us = t;
+	dsicm_set_idle_qos(ddata);
+	mutex_unlock(&ddata->lock);
+	return count;
+}
+
+static ssize_t dsicm_split_late_us_show(struct device *dev, struct device_attribute *attr,
+					 char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ddata->split_late_us);
+}
+
+static ssize_t dsicm_split_late_us_store(struct device *dev, struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	int r = kstrtou32(buf, 0, &ddata->split_late_us);
+
+	return r ? r : count;
+}
+
+static DEVICE_ATTR(split_late_us, S_IRUGO | S_IWUSR, dsicm_split_late_us_show,
+		   dsicm_split_late_us_store);
+static DEVICE_ATTR(update_stats, S_IRUGO | S_IWUSR, dsicm_update_stats_show,
+		   dsicm_update_stats_store);
+static DEVICE_ATTR(idle_latency_us, S_IRUGO | S_IWUSR, dsicm_idle_latency_us_show,
+		   dsicm_idle_latency_us_store);
+
 static struct attribute *dsicm_attrs[] = {
+	&dev_attr_update_stats.attr,
+	&dev_attr_idle_latency_us.attr,
+	&dev_attr_split_late_us.attr,
 	&dev_attr_num_dsi_errors.attr,
 	&dev_attr_hw_revision.attr,
 	&dev_attr_ulps.attr,
@@ -988,6 +1111,7 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 		goto err;
 
 	ddata->enabled = 1;
+	dsicm_set_idle_qos(ddata);
 
 	if (!ddata->intro_printed) {
 		dev_info(&ddata->pdev->dev, "panel revision %02x.%02x.%02x\n",
@@ -1028,6 +1152,7 @@ static void dsicm_power_off(struct panel_drv_data *ddata)
 	in->ops.dsi->disable(in, true, false);
 
 	ddata->enabled = 0;
+	dsicm_set_idle_qos(ddata);
 }
 
 static int dsicm_panel_reset(struct panel_drv_data *ddata)
@@ -1259,6 +1384,7 @@ static void dsicm_split_start1(struct panel_drv_data *ddata)
 	    DSICM_HALF1_WAIT) {
 		dsicm_split_half(ddata, true, &x, &w);
 		ddata->split_t0 = ktime_get();
+		dsicm_update_stats(ddata);
 		if (in->ops.dsi->update_region(in, ddata->channel, x, w, true,
 					       dsicm_split_done1, ddata))
 			dsicm_split_fail(ddata);
@@ -1302,6 +1428,25 @@ static u32 dsicm_split_delay(struct panel_drv_data *ddata)
 	if (ddata->split_mid_us)
 		return ddata->split_mid_us;
 	return ddata->split_reverse ? ddata->frame_us * 52 / 100 : ddata->frame_us / 2;
+}
+
+/*
+ * An update asked for just after TE: in reverse mode its first half still fits before the scan comes
+ * back to the half's rows (TE is at mid-scan, the half takes about 6 of the 8.3 ms), so it starts now
+ * rather than at the next TE, which would show the previous frame twice. The second half's timer
+ * already runs from that TE. Up to split_late_us after TE (sysfs, 0 = off), and only while the
+ * longest first half so far still ends 0.3 ms before the scan's return.
+ */
+static void dsicm_split_late_start(struct panel_drv_data *ddata)
+{
+	u32 us = ktime_us_delta(ktime_get(), ddata->te_last);
+	u32 half = ddata->split_max[0];
+
+	if (!ddata->split_reverse || !half || us >= ddata->split_late_us ||
+	    us + half + 300 >= ddata->frame_us / 2)
+		return;
+	ddata->late_starts++;
+	dsicm_split_start1(ddata);
 }
 
 static enum hrtimer_restart dsicm_split_timer(struct hrtimer *timer)
@@ -1394,17 +1539,22 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 
 	if (dsicm_split(ddata)) {
 		u16 hx, hw;
+		u32 us = ktime_us_delta(ktime_get(), ddata->te_last);
 
+		ddata->phase[us < 1000 ? 0 : us < 2000 ? 1 : us < 15000 ? 2 : 3]++;
 		dsicm_split_half(ddata, true, &hx, &hw);
 		r = dsicm_set_update_window(ddata, hx, 0, hw, ddata->timings.y_res);
 		if (r)
 			goto err;
 		schedule_delayed_work(&ddata->te_timeout_work, msecs_to_jiffies(250));
 		atomic_set(&ddata->split_state, DSICM_HALF1_WAIT);
+		dsicm_split_late_start(ddata);
 		/* note: no bus_unlock here. unlock is in dsicm_split_done2 */
 		mutex_unlock(&ddata->lock);
 		return 0;
 	}
+
+	dsicm_update_stats(ddata);
 
 	/* XXX no need to send this every frame, but dsi break if not done */
 	r = dsicm_set_update_window(ddata, 0, 0,
@@ -1810,6 +1960,8 @@ static int dsicm_probe(struct platform_device *pdev)
 
 	INIT_DELAYED_WORK(&ddata->ulps_work, dsicm_ulps_work);
 	INIT_DELAYED_WORK(&ddata->lpm_work, dsicm_lpm_work);
+	ddata->idle_latency_us = 6000;
+	ddata->split_late_us = 2000;
 
 	dsicm_hw_reset(ddata);
 
