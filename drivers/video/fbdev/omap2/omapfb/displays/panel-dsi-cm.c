@@ -33,6 +33,7 @@
 
 #define DCS_READ_NUM_ERRORS	0x05
 #define DCS_BRIGHTNESS		0x51
+#define DCS_READ_BRIGHTNESS	0x52
 #define DCS_CTRL_DISPLAY	0x53
 #define DCS_WRITE_CABC		0x55
 #define DCS_GET_ID1		0xda
@@ -1012,6 +1013,7 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 	struct omap_dss_device *in = ddata->in;
 	u8 id1, id2, id3;
 	int r;
+	bool skip_init = omapdss_def_disp_enabled();
 	struct omap_dss_dsi_config dsi_config = {
 		.mode = OMAP_DSS_DSI_CMD_MODE,
 		.pixel_format = OMAP_DSS_DSI_FMT_RGB888,
@@ -1043,9 +1045,32 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 		goto err0;
 	}
 
-	dsicm_hw_reset(ddata);
+	/* sgx: as stock's skip_first_init: a reset would lose NOLO's picture */
+	if (!skip_init)
+		dsicm_hw_reset(ddata);
 
 	in->ops.dsi->enable_hs(in, ddata->channel, false);
+
+	/*
+	 * sgx: NOLO's panel is kept if it still holds its settings: a reset (or power loss) clears
+	 * the brightness, a sleep in keeps it (and the picture). Asleep (power mode without sleep out
+	 * 0x10 / display on 0x04) it's woken below (sleep out, display on), as stock.
+	 */
+	if (skip_init) {
+		u8 pm = 0, bl = 0;
+
+		dsicm_dcs_read_1(ddata, MIPI_DCS_GET_POWER_MODE, &pm);
+		dsicm_dcs_read_1(ddata, DCS_READ_BRIGHTNESS, &bl);
+		if (!bl) {
+			dev_info(&ddata->pdev->dev, "NOLO's display is gone (power mode %02x)\n", pm);
+			skip_init = false;
+			omapdss_def_disp_done();
+			dsicm_hw_reset(ddata);
+		} else {
+			dev_info(&ddata->pdev->dev, "keeping NOLO's display (power mode %02x, brightness %u)\n",
+				 pm, bl);
+		}
+	}
 
 	r = dsicm_sleep_out(ddata);
 	if (r)
@@ -1073,6 +1098,14 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 		r = dsicm_dcs_write_0(ddata, MIPI_DCS_ENTER_PARTIAL_MODE);
 		if (r)
 			goto err;
+	}
+
+	/* sgx: NOLO's brightness kept, as stock */
+	if (skip_init && ddata->bldev) {
+		u8 b;
+
+		if (!dsicm_dcs_read_1(ddata, DCS_READ_BRIGHTNESS, &b))
+			ddata->bldev->props.brightness = b;
 	}
 
 	/* The backlight's brightness, as stock */
@@ -1129,6 +1162,12 @@ err:
 
 	in->ops.dsi->disable(in, true, false);
 err0:
+	/* sgx: NOLO's panel didn't answer: a full power on, as stock */
+	if (skip_init) {
+		omapdss_def_disp_done();
+		dev_err(&ddata->pdev->dev, "retrying panel power on\n");
+		r = dsicm_power_on(ddata);
+	}
 	return r;
 }
 
@@ -1917,7 +1956,9 @@ static int dsicm_probe(struct platform_device *pdev)
 
 	atomic_set(&ddata->do_update, 0);
 
-	ddata->reset_gpio = devm_gpiod_get(&pdev->dev, "reset", GPIOD_OUT_LOW);
+	/* sgx: left released (see dsicm_hw_reset) if NOLO's panel is on, keeping its picture */
+	ddata->reset_gpio = devm_gpiod_get(&pdev->dev, "reset",
+			omapdss_def_disp_enabled() ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW);
 	r = PTR_ERR_OR_ZERO(ddata->reset_gpio);
 	if (r) {
 		dev_err(&pdev->dev, "Failed to request reset gpio: %d\n", r);

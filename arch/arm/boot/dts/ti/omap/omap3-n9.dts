@@ -111,6 +111,14 @@
 	vdda_video-supply = <&vdac>;
 };
 
+/*
+ * sgx: GPIO bank 3 as NOLO left it (no reset at boot, as stock): its gpio 87 holds the panel out of
+ * reset, so NOLO's picture stays until Harmattan draws (omapfb-takeover.patch)
+ */
+&gpio3 {
+	ti,no-reset-on-init;
+};
+
 &dsi {
 	status = "okay";
 

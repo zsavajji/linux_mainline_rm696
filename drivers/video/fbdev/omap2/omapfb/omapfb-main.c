@@ -2336,7 +2336,10 @@ static int omapfb_init_display(struct omapfb2_device *fbdev,
 		}
 
 		dssdrv->get_resolution(dssdev, &w, &h);
-		r = dssdrv->update(dssdev, 0, 0, w, h);
+		/* sgx: not over NOLO's picture (omapdss.def_disp_enabled, as stock's omapfb): the panel
+		 * keeps it until userspace draws (preinit's boot image) */
+		if (!omapdss_def_disp_enabled())
+			r = dssdrv->update(dssdev, 0, 0, w, h);
 		if (r) {
 			dev_err(fbdev->dev,
 					"Failed to update display\n");
@@ -2345,6 +2348,8 @@ static int omapfb_init_display(struct omapfb2_device *fbdev,
 	} else {
 		d->update_mode = OMAPFB_AUTO_UPDATE;
 	}
+
+	omapdss_def_disp_done();
 
 	return 0;
 }

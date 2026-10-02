@@ -40,6 +40,27 @@ static char *def_disp_name;
 module_param_named(def_disp, def_disp_name, charp, 0);
 MODULE_PARM_DESC(def_disp, "default display name");
 
+/*
+ * sgx: stock's omapdss.def_disp_enabled: the bootloader (NOLO) left the default display on, showing
+ * its logo. Until omapfb's first enable is done (omapdss_def_disp_done()), the panel keeps that
+ * picture: the panel isn't reset and no frame is sent (panel-dsi-cm first checks it's still on).
+ */
+static bool def_disp_enabled;
+module_param(def_disp_enabled, bool, 0);
+MODULE_PARM_DESC(def_disp_enabled, "default display is enabled");
+
+bool omapdss_def_disp_enabled(void)
+{
+	return def_disp_enabled;
+}
+EXPORT_SYMBOL(omapdss_def_disp_enabled);
+
+void omapdss_def_disp_done(void)
+{
+	def_disp_enabled = false;
+}
+EXPORT_SYMBOL(omapdss_def_disp_done);
+
 const char *omapdss_get_default_display_name(void)
 {
 	return core.default_display_name;
