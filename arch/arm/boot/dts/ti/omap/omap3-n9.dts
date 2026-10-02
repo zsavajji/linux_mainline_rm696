@@ -105,6 +105,25 @@
 	};
 };
 
+/*
+ * sgx: the kernel log kept in RAM across a warm reset (pstore/ramoops): with the test kernel armed
+ * again, a panic's log survives into the next boot (ramboot/init copies it to MyDocs/.ramboot)
+ */
+/ {
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		ramoops@8f000000 {
+			compatible = "ramoops";
+			reg = <0x8f000000 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+		};
+	};
+};
+
 &dss {
 	status = "okay";
 
