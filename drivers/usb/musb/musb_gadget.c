@@ -1173,10 +1173,40 @@ void musb_ep_restart(struct musb *musb, struct musb_request *req)
 		txstate(musb, req);
 	} else {
 		csr = musb_readw(epio, MUSB_RXCSR);
+		/*
+		 * A packet that came while no request was queued (its interrupt found none) is this
+		 * request's: read by the RX path from a work, as usb_ep_queue() must not complete
+		 * (3fc137386c46 flushed it instead, "one or two packets dropped": a mass storage
+		 * command lost, the host resetting the device after 10 s)
+		 */
+		if (csr & MUSB_RXCSR_RXPKTRDY) {
+			musb->g_rx_pending |= BIT(req->epnum);
+			schedule_work(&musb->g_rx_work);
+			return;
+		}
 		csr |= MUSB_RXCSR_FLUSHFIFO | MUSB_RXCSR_P_WZC_BITS;
 		musb_writew(epio, MUSB_RXCSR, csr);
 		musb_writew(epio, MUSB_RXCSR, csr);
 	}
+}
+
+static void musb_g_rx_work(struct work_struct *work)
+{
+	struct musb *musb = container_of(work, struct musb, g_rx_work);
+	unsigned long flags;
+	u16 pending;
+	u8 epnum;
+
+	pm_runtime_get_sync(musb->controller);
+	spin_lock_irqsave(&musb->lock, flags);
+	pending = musb->g_rx_pending;
+	musb->g_rx_pending = 0;
+	for (epnum = 1; epnum < musb->nr_endpoints; epnum++)
+		if (pending & BIT(epnum))
+			musb_g_rx(musb, epnum);
+	spin_unlock_irqrestore(&musb->lock, flags);
+	pm_runtime_mark_last_busy(musb->controller);
+	pm_runtime_put_autosuspend(musb->controller);
 }
 
 static int musb_ep_restart_resume_work(struct musb *musb, void *data)
@@ -1832,6 +1862,7 @@ int musb_gadget_setup(struct musb *musb)
 	/* don't support otg protocols */
 	musb->g.is_otg = 0;
 	INIT_DELAYED_WORK(&musb->gadget_work, musb_gadget_work);
+	INIT_WORK(&musb->g_rx_work, musb_g_rx_work);
 	musb_g_init_endpoints(musb);
 
 	musb->is_active = 0;
@@ -1855,6 +1886,7 @@ void musb_gadget_cleanup(struct musb *musb)
 		return;
 
 	cancel_delayed_work_sync(&musb->gadget_work);
+	cancel_work_sync(&musb->g_rx_work);
 	musb_compat_sysfs(musb, false);
 	usb_del_gadget_udc(&musb->g);
 }
