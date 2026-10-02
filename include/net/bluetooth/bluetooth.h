@@ -70,6 +70,17 @@ struct bt_security {
 	__u8 level;
 	__u8 key_size;
 };
+
+/*
+ * BT_SECURITY from user space: BlueZ 4 (Harmattan's) passes the level alone, which kernels took
+ * until copy_safe_from_sockptr() made the whole struct mandatory (6.9); key_size stays as set.
+ */
+static inline int bt_copy_security(struct bt_security *sec, sockptr_t optval, unsigned int optlen)
+{
+	if (optlen == sizeof(sec->level))
+		return copy_from_sockptr(&sec->level, optval, optlen) ? -EFAULT : 0;
+	return copy_safe_from_sockptr(sec, sizeof(*sec), optval, optlen);
+}
 #define BT_SECURITY_SDP		0
 #define BT_SECURITY_LOW		1
 #define BT_SECURITY_MEDIUM	2

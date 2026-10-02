@@ -701,7 +701,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname,
 
 		sec.level = BT_SECURITY_LOW;
 
-		err = copy_safe_from_sockptr(&sec, sizeof(sec), optval, optlen);
+		err = bt_copy_security(&sec, optval, optlen);
 		if (err)
 			break;
 
