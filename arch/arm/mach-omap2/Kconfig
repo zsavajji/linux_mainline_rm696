@@ -267,4 +267,13 @@ config OMAP5_ERRATA_801819
 	  a snoop from completing. Under certain conditions this can cause the
 	  system to deadlock.
 
+config OMAP3_SEC
+	tristate "Nokia OMAP3 HS secure environment (/dev/omap_sec, BB5)"
+	depends on ARCH_OMAP3
+	help
+	  Nokia's driver for the OMAP3 HS secure environment of the N9 and
+	  N950, which Harmattan's libbb5, bb5-init and Aegis use: omap_sec,
+	  the /dev/omap_sec character device and its protected application
+	  (PA) loader, and omap_hs, its calls into the secure ROM and PPA.
+
 endmenu

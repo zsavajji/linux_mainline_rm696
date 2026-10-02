@@ -229,3 +229,8 @@ targets += pm-asm-offsets.s
 clean-files += pm-asm-offsets.h
 
 obj-$(CONFIG_OMAP_IOMMU)		+= omap-iommu.o
+
+# Nokia's OMAP3 HS secure environment (Harmattan's BB5): /dev/omap_sec and its secure-side calls
+obj-$(CONFIG_OMAP3_SEC)			+= omap_sec.o omap_hs.o
+omap_sec-y				:= sec.o pa.o
+omap_hs-y				:= hs.o sec_hal.o sec_hal_entry.o
