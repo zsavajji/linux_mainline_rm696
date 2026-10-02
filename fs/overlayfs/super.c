@@ -1584,6 +1584,25 @@ struct file_system_type ovl_fs_type = {
 };
 MODULE_ALIAS_FS("overlay");
 
+/*
+ * sgx (Aegis's validator, security/aegis/validator/hashlist.c): whether @dev is
+ * the st_dev the overlay @sb reports for one of its layers' files (pseudo_dev,
+ * when the layers are on different filesystems), so a reference hashlist keyed
+ * by st_dev finds the overlay.
+ */
+bool ovl_layer_pseudo_dev(struct super_block *sb, dev_t dev)
+{
+	struct ovl_fs *ofs = OVL_FS(sb);
+	unsigned int i;
+
+	if (sb->s_type != &ovl_fs_type)
+		return false;
+	for (i = 0; i < ofs->numfs; i++)
+		if (ofs->fs[i].pseudo_dev == dev)
+			return true;
+	return false;
+}
+
 static void ovl_inode_init_once(void *foo)
 {
 	struct ovl_inode *oi = foo;
