@@ -364,5 +364,14 @@ config IP_NF_ARP_MANGLE
 	  This option is needed by both arptables-legacy and arptables-nft.
 	  It is not used by nftables.
 
+config IP_NF_HB
+	bool "IP heartbeat (/dev/iphb)"
+	depends on NETFILTER && INET
+	help
+	  Nokia's IP heartbeat from the N9's kernel: outgoing TCP keepalives
+	  are held until the user space heartbeat (Harmattan's DSME) releases
+	  them, so the radio wakes once for all of them. Without DSME holding
+	  /dev/iphb open, keepalives pass as is.
+
 endmenu
 

@@ -6,6 +6,9 @@
 # defrag
 obj-$(CONFIG_NF_DEFRAG_IPV4) += nf_defrag_ipv4.o
 
+# Nokia's IP heartbeat (/dev/iphb)
+obj-$(CONFIG_IP_NF_HB) += iphb.o
+
 obj-$(CONFIG_NF_SOCKET_IPV4) += nf_socket_ipv4.o
 obj-$(CONFIG_NF_TPROXY_IPV4) += nf_tproxy_ipv4.o
 
