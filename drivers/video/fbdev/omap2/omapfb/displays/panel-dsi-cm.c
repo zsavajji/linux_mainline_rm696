@@ -1959,6 +1959,9 @@ static int dsicm_probe(struct platform_device *pdev)
 	}
 
 	INIT_DELAYED_WORK(&ddata->ulps_work, dsicm_ulps_work);
+	/* As stock (board-rm696-video.c): the DSI link to ULPS 500 ms after the last update, so DSS
+	 * idles while the picture is still (sysfs ulps_timeout, 0 = never) */
+	ddata->ulps_timeout = 500;
 	INIT_DELAYED_WORK(&ddata->lpm_work, dsicm_lpm_work);
 	ddata->idle_latency_us = 6000;
 	ddata->split_late_us = 2000;
