@@ -256,6 +256,8 @@ struct ti_clk_ll_ops {
 					u8 idlest_shift);
 	int	(*cm_split_idlest_reg)(struct clk_omap_reg *idlest_reg,
 				       s16 *prcm_inst, u8 *idlest_reg_id);
+	/* OMAP3 dpll3_m2_ck: the CORE DPLL M2 with the SDRC, from SRAM (sgx) */
+	int	(*core_dpll_m2_set_rate)(unsigned long rate, unsigned long clkrate, u32 new_div);
 };
 
 #define to_clk_hw_omap(_hw) container_of(_hw, struct clk_hw_omap, hw)

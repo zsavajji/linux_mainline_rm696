@@ -32,6 +32,7 @@
 #include "omap_device.h"
 #include "omap-secure.h"
 #include "soc.h"
+#include "sdram-nokia.h"
 
 static struct omap_hsmmc_platform_data __maybe_unused mmc_pdata[2];
 
@@ -560,7 +561,11 @@ void __init pdata_quirks_init(const struct of_device_id *omap_dt_match_table)
 	 * We still need this for omap2420 and omap3 PM to work, others are
 	 * using drivers/misc/sram.c already.
 	 */
-	if (of_machine_is_compatible("ti,omap2420") ||
+	/* sgx: the N9/N950's SDRAM timings per SDRC rate (Nokia's), for CORE/L3 scaling (dpll3_m2_ck) */
+	if (of_machine_is_compatible("nokia,omap3-n9") ||
+	    of_machine_is_compatible("nokia,omap3-n950"))
+		omap_sdrc_init(nokia_get_sdram_timings(), NULL);
+	else if (of_machine_is_compatible("ti,omap2420") ||
 	    of_machine_is_compatible("ti,omap3"))
 		omap_sdrc_init(NULL, NULL);
 

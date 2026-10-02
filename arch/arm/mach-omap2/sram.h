@@ -13,6 +13,19 @@ extern u32 omap2_set_prcm(u32 dpll_ctrl_val, u32 sdrc_rfr_val, int bypass);
 
 extern void omap3_sram_restore_context(void);
 
+u32 omap3_configure_core_dpll(u32 m2, u32 unlock_dll, u32 f, u32 inc,
+			      u32 sdrc_rfr_ctrl_0, u32 sdrc_actim_ctrl_a_0,
+			      u32 sdrc_actim_ctrl_b_0, u32 sdrc_mr_0,
+			      u32 sdrc_rfr_ctrl_1, u32 sdrc_actim_ctrl_a_1,
+			      u32 sdrc_actim_ctrl_b_1, u32 sdrc_mr_1);
+extern u32 omap3_sram_configure_core_dpll(
+			u32 m2, u32 unlock_dll, u32 f, u32 inc,
+			u32 sdrc_rfr_ctrl_0, u32 sdrc_actim_ctrl_a_0,
+			u32 sdrc_actim_ctrl_b_0, u32 sdrc_mr_0,
+			u32 sdrc_rfr_ctrl_1, u32 sdrc_actim_ctrl_a_1,
+			u32 sdrc_actim_ctrl_b_1, u32 sdrc_mr_1);
+extern unsigned long omap3_sram_configure_core_dpll_sz;
+
 extern int __init omap_sram_init(void);
 
 extern void *omap_sram_push(void *funcp, unsigned long size);

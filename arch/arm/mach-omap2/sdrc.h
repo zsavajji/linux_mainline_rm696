@@ -75,6 +75,9 @@ struct omap_sdrc_params {
 #ifdef CONFIG_SOC_HAS_OMAP2_SDRC
 void omap2_sdrc_init(struct omap_sdrc_params *sdrc_cs0,
 			    struct omap_sdrc_params *sdrc_cs1);
+int omap2_sdrc_get_params(unsigned long r,
+			  struct omap_sdrc_params **sdrc_cs0,
+			  struct omap_sdrc_params **sdrc_cs1);
 #else
 static inline void __init omap2_sdrc_init(struct omap_sdrc_params *sdrc_cs0,
 					  struct omap_sdrc_params *sdrc_cs1) {};

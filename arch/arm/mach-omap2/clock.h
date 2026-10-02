@@ -63,6 +63,8 @@
 
 extern struct ti_clk_ll_ops omap_clk_ll_ops;
 
+int omap3_core_dpll_m2_set_rate(unsigned long rate, unsigned long clkrate, u32 new_div);
+
 int __init omap2_clk_setup_ll_ops(void);
 
 void __init ti_clk_init_features(void);

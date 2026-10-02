@@ -440,7 +440,8 @@
 		dpll3_m2_ck: clock-dpll3-m2@27 {
 			reg = <27>;
 			#clock-cells = <0>;
-			compatible = "ti,divider-clock";
+			/* sgx: changes with the SDRC (CORE/L3 scaling) */
+			compatible = "ti,omap3-dpll3-m2-clock";
 			clock-output-names = "dpll3_m2_ck";
 			clocks = <&dpll3_ck>;
 			ti,max-div = <31>;

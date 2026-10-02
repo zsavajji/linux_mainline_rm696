@@ -299,6 +299,32 @@ static void clk_divider_restore_context(struct clk_hw *hw)
 	ti_clk_ll_ops->clk_writel(val, &divider->reg);
 }
 
+/*
+ * sgx: the OMAP3 CORE DPLL M2 (dpll3_m2_ck) also clocks the SDRAM: its divider changes only with the
+ * SDRC reprogrammed, from SRAM (mach-omap2's clkt34xx_dpll3m2.c, through ti_clk_ll_ops). A plain
+ * divider write would leave the SDRC's refresh at the old rate.
+ */
+static int ti_clk_dpll3m2_set_rate(struct clk_hw *hw, unsigned long rate,
+				   unsigned long parent_rate)
+{
+	struct clk_omap_divider *divider = to_clk_omap_divider(hw);
+	unsigned int div;
+
+	if (!rate || !ti_clk_ll_ops->core_dpll_m2_set_rate)
+		return -EINVAL;
+
+	div = clamp_t(unsigned int, DIV_ROUND_UP(parent_rate, rate), divider->min, divider->max);
+
+	return ti_clk_ll_ops->core_dpll_m2_set_rate(DIV_ROUND_UP(parent_rate, div),
+						    clk_hw_get_rate(hw), _get_val(divider, div));
+}
+
+static const struct clk_ops ti_clk_dpll3m2_ops = {
+	.recalc_rate = ti_clk_divider_recalc_rate,
+	.determine_rate = ti_clk_divider_determine_rate,
+	.set_rate = ti_clk_dpll3m2_set_rate,
+};
+
 const struct clk_ops ti_clk_divider_ops = {
 	.recalc_rate = ti_clk_divider_recalc_rate,
 	.determine_rate = ti_clk_divider_determine_rate,
@@ -309,7 +335,8 @@ const struct clk_ops ti_clk_divider_ops = {
 
 static struct clk *_register_divider(struct device_node *node,
 				     u32 flags,
-				     struct clk_omap_divider *div)
+				     struct clk_omap_divider *div,
+				     const struct clk_ops *ops)
 {
 	struct clk_init_data init = {};
 	const char *parent_name;
@@ -319,7 +346,7 @@ static struct clk *_register_divider(struct device_node *node,
 
 	name = ti_dt_clk_name(node);
 	init.name = name;
-	init.ops = &ti_clk_divider_ops;
+	init.ops = ops;
 	init.flags = flags;
 	init.parent_names = (parent_name ? &parent_name : NULL);
 	init.num_parents = (parent_name ? 1 : 0);
@@ -511,7 +538,8 @@ static int __init ti_clk_divider_populate(struct device_node *node,
  *
  * Sets up a basic divider clock.
  */
-static void __init of_ti_divider_clk_setup(struct device_node *node)
+static void __init _of_ti_divider_clk_setup(struct device_node *node,
+					    const struct clk_ops *ops)
 {
 	struct clk *clk;
 	u32 flags = 0;
@@ -524,7 +552,7 @@ static void __init of_ti_divider_clk_setup(struct device_node *node)
 	if (ti_clk_divider_populate(node, div, &flags))
 		goto cleanup;
 
-	clk = _register_divider(node, flags, div);
+	clk = _register_divider(node, flags, div, ops);
 	if (!IS_ERR(clk)) {
 		of_clk_add_provider(node, of_clk_src_simple_get, clk);
 		of_ti_clk_autoidle_setup(node);
@@ -535,7 +563,18 @@ cleanup:
 	kfree(div->table);
 	kfree(div);
 }
+
+static void __init of_ti_divider_clk_setup(struct device_node *node)
+{
+	_of_ti_divider_clk_setup(node, &ti_clk_divider_ops);
+}
 CLK_OF_DECLARE(divider_clk, "ti,divider-clock", of_ti_divider_clk_setup);
+
+static void __init of_ti_dpll3m2_clk_setup(struct device_node *node)
+{
+	_of_ti_divider_clk_setup(node, &ti_clk_dpll3m2_ops);
+}
+CLK_OF_DECLARE(dpll3m2_clk, "ti,omap3-dpll3-m2-clock", of_ti_dpll3m2_clk_setup);
 
 static void __init of_ti_composite_divider_clk_setup(struct device_node *node)
 {

@@ -52,6 +52,9 @@ obj-$(CONFIG_SOC_DRA7XX)		+= $(omap5-dra7-common-y)
 # Functions loaded to SRAM
 obj-$(CONFIG_SOC_OMAP2420)		+= sram242x.o
 obj-$(CONFIG_SOC_OMAP2430)		+= sram243x.o
+# sgx: CORE/L3 scaling (dpll3_m2_ck), from Linux 4.1
+obj-$(CONFIG_ARCH_OMAP3)		+= sram34xx.o clkt34xx_dpll3m2.o sdram-nokia.o
+AFLAGS_sram34xx.o			:=-Wa,-march=armv7-a
 
 # Restart code (OMAP4/5 currently in omap4-common.c)
 obj-$(CONFIG_SOC_OMAP2420)		+= omap2-restart.o
