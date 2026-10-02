@@ -1256,7 +1256,11 @@ void omap_ssi_port_update_fclk(struct hsi_controller *ssi,
 	/* update divisor */
 	u32 div = ssi_calculate_div(ssi);
 	omap_port->sst.divisor = div;
-	ssi_restore_divisor(omap_port);
+	/* a suspended port gets it on resume, which always restores the divisor */
+	if (pm_runtime_get_if_active(omap_port->pdev) > 0) {
+		ssi_restore_divisor(omap_port);
+		pm_runtime_put_autosuspend(omap_port->pdev);
+	}
 }
 
 #ifdef CONFIG_PM
