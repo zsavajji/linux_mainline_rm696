@@ -263,6 +263,13 @@ static void __init of_ti_composite_mux_clk_setup(struct device_node *node)
 		goto cleanup;
 
 	mux->shift = mux->reg.bit;
+	/*
+	 * sgx: no latch bit. kzalloc left 0, so ti_clk_latch() set and cleared bit 0 of the register
+	 * after every parent change: sgx_fck on core_d2 (5) got 192M (4) and lost its clock when DPLL4
+	 * stopped (the standby crash), and the GPT10/11 muxes glitched CM_CLKSEL_CORE's L3 divider.
+	 * Broken since ee2fc3c5ca8d ("clk: ti: add support for clock latching to mux clocks", 4.17).
+	 */
+	mux->latch = -EINVAL;
 
 	if (of_property_read_bool(node, "ti,index-starts-at-one"))
 		mux->flags |= CLK_MUX_INDEX_ONE;
