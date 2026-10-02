@@ -280,8 +280,11 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 		return 0;
 	}
 
-	/* bitfill_aligned() assumes that it's at least 8x8 */
-	if (var->xres < 8 || var->yres < 8)
+	/*
+	 * bitfill_aligned() assumes that it's at least 8x8. 0x0 is left to the driver: it is omapfb's
+	 * mode for an overlay framebuffer without memory, which Harmattan's X driver writes back as read.
+	 */
+	if ((var->xres < 8 || var->yres < 8) && (var->xres || var->yres))
 		return -EINVAL;
 
 	/* Too huge resolution causes multiplication overflow. */
