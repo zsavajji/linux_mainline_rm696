@@ -224,11 +224,21 @@ struct hashlist_volume {
 	struct hashlist_line *hashlist;
 };
 
+bool ovl_layer_pseudo_dev(struct super_block *sb, dev_t dev);
+
 static void hashlist_attach(struct super_block *sb, void *arg)
 {
 	struct hashlist_volume *v = arg;
+	dev_t dev = new_decode_dev(v->device_id);
 
-	if (v->found || sb->s_dev != new_decode_dev(v->device_id))
+	/*
+	 * sgx: or the overlay whose files report this st_dev (a layer's
+	 * pseudo_dev, fs/overlayfs/super.c), as the exec-time lookup finds the
+	 * overlay's inode. ponytail: the layers share one hashlist, so equal
+	 * inode numbers on two layers collide; fine for the read-only test
+	 * overlays, gone with a plain ext4 root.
+	 */
+	if (v->found || (sb->s_dev != dev && !ovl_layer_pseudo_dev(sb, dev)))
 		return;
 	v->found = 1;
 	if (*aegis_sb(sb) == NULL)
