@@ -631,7 +631,7 @@ int pn_sock_bind_res(struct sock *sk, u8 res)
 
 	if (!net_eq(sock_net(sk), &init_net))
 		return -ENOIOCTLCMD;
-	if (!capable(CAP_SYS_ADMIN))
+	if (!phonet_access_check())
 		return -EPERM;
 	if (pn_socket_autobind(sk->sk_socket))
 		return -EAGAIN;
@@ -650,7 +650,7 @@ int pn_sock_unbind_res(struct sock *sk, u8 res)
 {
 	int ret = -ENOENT;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!phonet_access_check())
 		return -EPERM;
 
 	mutex_lock(&resource_mutex);

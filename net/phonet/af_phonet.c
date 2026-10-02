@@ -47,6 +47,21 @@ static inline void phonet_proto_put(const struct phonet_protocol *pp)
 
 /* protocol family functions */
 
+/*
+ * Phonet access for a group too, as Nokia's kernel had it: Harmattan's cellular daemons (sscd, csd)
+ * run without CAP_SYS_ADMIN, in the phonet group (/etc/modprobe.d: phonet_gid=30012; built in, the
+ * kernel command line's phonet.phonet_gid).
+ */
+static uint phonet_gid;
+module_param(phonet_gid, uint, 0444);
+MODULE_PARM_DESC(phonet_gid, "Group allowed Phonet access besides CAP_SYS_ADMIN (0: none)");
+
+bool phonet_access_check(void)
+{
+	return capable(CAP_SYS_ADMIN) ||
+	       (phonet_gid && in_group_p(make_kgid(&init_user_ns, phonet_gid)));
+}
+
 static int pn_socket_create(struct net *net, struct socket *sock, int protocol,
 			    int kern)
 {
@@ -55,7 +70,7 @@ static int pn_socket_create(struct net *net, struct socket *sock, int protocol,
 	const struct phonet_protocol *pnp;
 	int err;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!phonet_access_check())
 		return -EPERM;
 
 	if (protocol == 0) {

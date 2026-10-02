@@ -48,6 +48,7 @@ int pn_sock_get_port(struct sock *sk, unsigned short sport);
 
 struct sock *pn_find_sock_by_res(struct net *net, u8 res);
 int pn_sock_bind_res(struct sock *sock, u8 res);
+bool phonet_access_check(void);
 int pn_sock_unbind_res(struct sock *sk, u8 res);
 void pn_sock_unbind_all_res(struct sock *sk);
 
