@@ -4144,6 +4144,10 @@ static int hci_le_read_local_features_sync(struct hci_dev *hdev)
 /* Read LE Supported States */
 static int hci_le_read_supported_states_sync(struct hci_dev *hdev)
 {
+	/* A malformed reply fails the whole init (TI1273's LE firmware) */
+	if (hci_test_quirk(hdev, HCI_QUIRK_BROKEN_LE_STATES))
+		return 0;
+
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_SUPPORTED_STATES,
 				     0, NULL, HCI_CMD_TIMEOUT);
 }

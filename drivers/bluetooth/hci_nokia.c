@@ -34,6 +34,16 @@
 
 #define FIRMWARE_BCM2048	"nokia/bcmfw.bin"
 #define FIRMWARE_TI1271		"nokia/ti1273.bin"
+#define FIRMWARE_TI1271_LE	"nokia/ti1273_le.bin"
+#define FIRMWARE_TI1271_PRELE	"nokia/ti1273_prele.bin"
+
+/*
+ * The TI1271 at 921600 after its firmware (which leaves it at 3.69 Mbaud), with TI's own command for
+ * it (as hci_ll for WiLink): at 3.69 Mbaud the OMAP3 UART loses received bytes (frame reassembly
+ * failures, lost inquiry events), with or without DMA.
+ */
+#define TI1271_BAUD_RATE		921600
+#define HCI_VS_UPDATE_UART_HCI_BAUDRATE	0xff36
 
 #define HCI_NOKIA_NEG_PKT	0x06
 #define HCI_NOKIA_ALIVE_PKT	0x07
@@ -331,7 +341,21 @@ static int nokia_setup_fw(struct hci_uart *hu)
 	if (btdev->man_id == NOKIA_ID_BCM2048) {
 		fwname = FIRMWARE_BCM2048;
 	} else if (btdev->man_id == NOKIA_ID_TI1271) {
-		fwname = FIRMWARE_TI1271;
+		/*
+		 * By chip version, as Nokia's own driver (hci_h4p/fw.c): the N9's (0xd1/0xf1) takes the
+		 * LE firmware; with the plain one, it never answers the HCI reset after the download.
+		 */
+		switch (btdev->ver_id) {
+		case 0xe1:
+			fwname = FIRMWARE_TI1271_PRELE;
+			break;
+		case 0xd1:
+		case 0xf1:
+			fwname = FIRMWARE_TI1271_LE;
+			break;
+		default:
+			fwname = FIRMWARE_TI1271;
+		}
 	} else {
 		dev_err(dev, "Unsupported bluetooth device!");
 		return -ENODEV;
@@ -436,6 +460,26 @@ static int nokia_setup(struct hci_uart *hu)
 	nokia_flow_control(btdev->serdev, false);
 	serdev_device_set_baudrate(btdev->serdev, MAX_BAUD_RATE);
 	nokia_flow_control(btdev->serdev, true);
+
+	if (btdev->man_id == NOKIA_ID_TI1271) {
+		__le32 speed = cpu_to_le32(TI1271_BAUD_RATE);
+		struct sk_buff *skb;
+
+		/* answered at the old rate, then the chip switches */
+		skb = __hci_cmd_sync(hu->hdev, HCI_VS_UPDATE_UART_HCI_BAUDRATE, sizeof(speed),
+				     &speed, HCI_INIT_TIMEOUT);
+		if (IS_ERR(skb)) {
+			dev_warn(dev, "Baud rate change failed: %ld", PTR_ERR(skb));
+		} else {
+			kfree_skb(skb);
+			nokia_flow_control(btdev->serdev, false);
+			serdev_device_set_baudrate(btdev->serdev, TI1271_BAUD_RATE);
+			nokia_flow_control(btdev->serdev, true);
+		}
+
+		/* The TI1273 LE firmware answers LE Read Supported States with 4 bytes of the 8 */
+		hci_set_quirk(hu->hdev, HCI_QUIRK_BROKEN_LE_STATES);
+	}
 
 	if (btdev->man_id == NOKIA_ID_BCM2048) {
 		hu->hdev->set_bdaddr = btbcm_set_bdaddr;
