@@ -166,6 +166,9 @@ static inline const struct cred *kernel_cred(void)
 extern int set_security_override(struct cred *, u32);
 extern int set_security_override_from_ctx(struct cred *, const char *);
 extern int set_create_files_as(struct cred *, struct inode *);
+#ifdef CONFIG_SECURITY_CREDENTIALS_POLICY
+extern int kernel_setuid(struct cred *new, kuid_t uid);
+#endif
 extern int cred_fscmp(const struct cred *, const struct cred *);
 extern void __init cred_init(void);
 extern int set_cred_ucounts(struct cred *);

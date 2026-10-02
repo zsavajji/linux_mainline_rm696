@@ -552,6 +552,41 @@ static void flag_nproc_exceeded(struct cred *new)
 		current->flags &= ~PF_NPROC_EXCEEDED;
 }
 
+#ifdef CONFIG_SECURITY_CREDENTIALS_POLICY
+/**
+ * kernel_setuid - Enable 'setuid' for kernel code
+ * @new: The new credentials being prepared
+ * @uid: The new uid
+ *
+ * This function does not check CAP_SETUID by design.
+ *
+ * Returns 0 on success. The error return indicates that construction
+ * of new credentials has failed and the 'new' structure must
+ * cancelled by abort_creds.
+ *
+ * (From the Nokia N9 kernel, for the Maemo Aegis credentials policy.)
+ */
+int kernel_setuid(struct cred *new, kuid_t uid)
+{
+	const struct cred *old = current_cred();
+	int retval;
+
+	new->suid = new->uid = uid;
+	if (!uid_eq(uid, old->uid)) {
+		retval = set_user(new);
+		if (retval < 0)
+			return retval;
+		retval = set_cred_ucounts(new);
+		if (retval < 0)
+			return retval;
+		flag_nproc_exceeded(new);
+	}
+	new->fsuid = new->euid = uid;
+	return 0;
+}
+EXPORT_SYMBOL(kernel_setuid);
+#endif
+
 /*
  * Unprivileged users may change the real uid to the effective uid
  * or vice versa.  (BSD-style)

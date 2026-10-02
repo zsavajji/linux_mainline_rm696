@@ -230,6 +230,21 @@ source "security/safesetid/Kconfig"
 source "security/lockdown/Kconfig"
 source "security/landlock/Kconfig"
 source "security/ipe/Kconfig"
+source "security/aegis/Kconfig"
+
+config SECURITY_CREDENTIALS_POLICY
+	bool "Enable credentials policy hook"
+	depends on SECURITY
+	help
+	  This enables the credentials policy hook, allowing an
+	  external policy module to define the credentials of binaries.
+	  The hook will cause no behaviour changes, until the
+	  specific policy module has been loaded. After that, the
+	  policy module is responsible for the credentials of the
+	  binaries (overrides the setuid/setgid binaries and file
+	  capabilities)
+
+	  (From the Nokia N9 kernel, for the Maemo Aegis credentials policy.)
 
 source "security/integrity/Kconfig"
 

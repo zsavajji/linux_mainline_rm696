@@ -49,7 +49,18 @@ struct linux_binprm {
 		 * Set by user space to check executability according to the
 		 * caller's environment.
 		 */
-		is_check:1;
+		is_check:1
+#ifdef CONFIG_SECURITY_CREDENTIALS_POLICY
+		/*
+		 * Aegis credentials policy (Nokia N9): a policy matched the
+		 * script being run, so it applies to its interpreter
+		 */
+		, policy_path:1,
+		/* The policy wants the real uid/gid set too */
+		hard_setuid:1,
+		hard_setgid:1
+#endif
+		;
 	struct file *executable; /* Executable to pass to the interpreter */
 	struct file *interpreter;
 	struct file *file;

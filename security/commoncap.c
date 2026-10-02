@@ -25,6 +25,9 @@
 #include <linux/binfmts.h>
 #include <linux/personality.h>
 #include <linux/mnt_idmapping.h>
+#ifdef CONFIG_SECURITY_AEGIS_CREDP
+#include <linux/aegis/credp.h>
+#endif
 #include <uapi/linux/lsm.h>
 
 #define CREATE_TRACE_POINTS
@@ -921,6 +924,17 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 	ret = get_file_caps(bprm, file, &effective, &has_fcap);
 	if (ret < 0)
 		return ret;
+#ifdef CONFIG_SECURITY_AEGIS_CREDP
+	/* Aegis credentials policy (Nokia N9) */
+	ret = credp_apply(bprm, file, &effective);
+	if (ret < 0)
+		return ret;
+	/* CREDP may change SECURE_NOROOT, the 'issecure' checks need
+	 * to be based on the new credentials, not the current! If not
+	 * changed, the secure bits in new cred is just a copy of the
+	 * current.
+	 */
+#endif
 
 	root_uid = make_kuid(new->user_ns, 0);
 
@@ -952,6 +966,16 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 
 	new->suid = new->fsuid = new->euid;
 	new->sgid = new->fsgid = new->egid;
+
+#ifdef CONFIG_SECURITY_CREDENTIALS_POLICY
+	if (bprm->hard_setuid) {
+		ret = kernel_setuid(new, new->euid);
+		if (ret < 0)
+			return ret;
+	}
+	if (bprm->hard_setgid)
+		new->gid = new->egid;
+#endif
 
 	/* File caps or setid cancels ambient. */
 	if (has_fcap || id_changed)
