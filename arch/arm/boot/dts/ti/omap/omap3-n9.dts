@@ -205,3 +205,82 @@
 		};
 	};
 };
+
+/*
+ * Harmattan on this kernel. Numbering as the stock 2.6.32 kernel's, which Harmattan's userspace
+ * hardcodes: I2C buses 1-3 (BME opens /dev/i2c-1 for the TWL5031, FCam /dev/i2c-2), GPIO banks from
+ * number 0 (BME: sysfs gpio162), which gpio-omap-legacy-base.patch reads from these aliases.
+ */
+/ {
+	aliases {
+		/delete-property/ i2c0;
+		i2c1 = &i2c1;
+		i2c2 = &i2c2;
+		i2c3 = &i2c3;
+		gpio0 = &gpio1;
+		gpio1 = &gpio2;
+		gpio2 = &gpio3;
+		gpio3 = &gpio4;
+		gpio4 = &gpio5;
+		gpio5 = &gpio6;
+	};
+};
+
+/*
+ * No power-off: the test phone's power button is broken, so a phone that powers off stays off.
+ * Without a handler, a power-off (DSME's shutdown, check_wipe's SysRq-O) halts instead, and the
+ * watchdogs reset the phone into NOLO and stock Harmattan.
+ */
+&twl_power {
+	/delete-property/ ti,use_poweroff;
+};
+
+/* The TWL5031's charger (BCC) is not the TWL4030 BCI this node's driver programs; BME drives it */
+&charger {
+	status = "disabled";
+};
+
+/*
+ * The CPU's operating points. Stock runs every N9 up to 1 GHz (/etc/pmconfig), so OPP1G is a normal
+ * OPP here, whatever the DM37x speed-bin efuse says (mainline makes it turbo-only, for binned parts).
+ * Above it, a little overclock as boost OPPs, off by default:
+ *	echo 1 > /sys/devices/system/cpu/cpufreq/boost
+ * The N9 community's overclocks (talk.maemo.org) went to 1.2-1.3 GHz and settled on 1.2 GHz as the
+ * daily ceiling; chips differ (some unstable past 950 MHz, others fine at 1.15 GHz). The ABB stays
+ * in FBB (its 1.375 V entry, all ti-abb knows); VDD1 goes up 25 mV for 1.2 GHz (its regulator's
+ * maximum is 1.45 V). The thermal zone still throttles.
+ */
+&cpu0_opp_table {
+	opp-1000000000 {
+		/delete-property/ turbo-mode;
+		opp-supported-hw = <0xffffffff 3>;
+	};
+
+	opp-1100000000 {
+		opp-hz = /bits/ 64 <1100000000>;
+		opp-microvolt = <1375000 1375000 1375000>,
+				 <1375000 1375000 1375000>;
+		opp-supported-hw = <0xffffffff 3>;
+		turbo-mode;
+	};
+
+	opp-1200000000 {
+		opp-hz = /bits/ 64 <1200000000>;
+		opp-microvolt = <1400000 1400000 1400000>,
+				 <1375000 1375000 1375000>;
+		opp-supported-hw = <0xffffffff 3>;
+		turbo-mode;
+	};
+};
+
+/* The touchscreen, as stock's board file (board-rm696-peripherals.c): IRQ GPIO 61, reset GPIO 81 */
+&i2c2 {
+	touchscreen@4b {
+		compatible = "atmel,maxtouch";
+		reg = <0x4b>;
+		interrupts-extended = <&gpio2 29 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&gpio3 17 GPIO_ACTIVE_LOW>;
+		vdda-supply = <&vaux1>;
+		vdd-supply = <&vio>;
+	};
+};
