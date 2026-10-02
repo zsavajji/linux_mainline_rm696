@@ -319,6 +319,13 @@ struct mxt_data {
 		u8 area, amplitude;
 	} t9_contacts[16];
 	struct t7_config t7_cfg;
+	/*
+	 * Nokia's N9 driver's sysfs controls, which Harmattan's mce uses (mxt_gesture_attrs): the wake
+	 * gesture armed (T24 code, 0 = none), the T9 and T24 control bytes to restore after it, and the
+	 * touchscreen disabled
+	 */
+	u8 wakeup_gesture, gesture_t9_ctrl, gesture_t24_ctrl;
+	bool ts_disabled;
 	struct mxt_dbg dbg;
 	struct regulator_bulk_data regulators[2];
 	struct gpio_desc *reset_gpio;
@@ -338,6 +345,7 @@ struct mxt_data {
 	u8 T15_reportid_max;
 	u16 T18_address;
 	u8 T19_reportid;
+	u8 T24_reportid;
 	u16 T44_address;
 	u8 T97_reportid_min;
 	u8 T97_reportid_max;
@@ -1085,6 +1093,8 @@ static void mxt_proc_t100_message(struct mxt_data *data, u8 *message)
 	data->update_input = true;
 }
 
+static void mxt_proc_t24_message(struct mxt_data *data, u8 *message);
+
 static int mxt_proc_message(struct mxt_data *data, u8 *message)
 {
 	u8 report_id = message[0];
@@ -1115,6 +1125,8 @@ static int mxt_proc_message(struct mxt_data *data, u8 *message)
 	} else if (report_id == data->T19_reportid) {
 		mxt_input_button(data, message);
 		data->update_input = true;
+	} else if (report_id == data->T24_reportid) {
+		mxt_proc_t24_message(data, message);
 	} else {
 		mxt_dump_message(data, message);
 	}
@@ -1785,6 +1797,7 @@ static void mxt_free_object_table(struct mxt_data *data)
 	data->T15_reportid_max = 0;
 	data->T18_address = 0;
 	data->T19_reportid = 0;
+	data->T24_reportid = 0;
 	data->T44_address = 0;
 	data->T97_reportid_min = 0;
 	data->T97_reportid_max = 0;
@@ -1872,6 +1885,9 @@ static int mxt_parse_object_table(struct mxt_data *data,
 			break;
 		case MXT_SPT_GPIOPWM_T19:
 			data->T19_reportid = min_id;
+			break;
+		case MXT_PROCI_ONETOUCH_T24:
+			data->T24_reportid = min_id;
 			break;
 		case MXT_TOUCH_PTC_KEYS_T97:
 			data->T97_reportid_min = min_id;
@@ -2193,7 +2209,9 @@ static int mxt_initialize_input_device(struct mxt_data *data)
 	if (!input_dev)
 		return -ENOMEM;
 
-	input_dev->name = "Atmel maXTouch Touchscreen";
+	/* The N9's as stock's: Harmattan's mce and udev (/dev/input/ts) match it */
+	input_dev->name = of_machine_is_compatible("nokia,omap3-n9") ?
+		"Atmel mXT Touchscreen" : "Atmel maXTouch Touchscreen";
 	input_dev->phys = data->phys;
 	input_dev->id.bustype = BUS_I2C;
 	input_dev->dev.parent = dev;
@@ -2205,6 +2223,7 @@ static int mxt_initialize_input_device(struct mxt_data *data)
 	input_dev->keycodesize = sizeof(data->t15_keymap[0]);
 
 	input_set_capability(input_dev, EV_KEY, BTN_TOUCH);
+	input_set_capability(input_dev, EV_MSC, MSC_GESTURE);	/* the wake gesture */
 
 	/* For single touch */
 	input_set_abs_params(input_dev, ABS_X, 0, data->max_x, 0, 0);
@@ -3235,6 +3254,178 @@ static ssize_t mxt_update_fw_store(struct device *dev,
 	return count;
 }
 
+/*
+ * The wake gesture, as Nokia's N9 driver: with the display off, mce writes the T24 gesture to wake on
+ * (4, double tap) to wait_for_gesture. Touch reports stop, T24 reports, and the chip scans every
+ * 50 ms (stock's wakeup interval); the gesture comes as EV_MSC/MSC_GESTURE, mce's wake event, and
+ * leaves the mode, as does writing 0. Nokia left it with a chip reset, back to the configuration in
+ * NVM; here the N9's lives in RAM only (mxt_write_n9_config), so the bytes changed are restored.
+ * Called with the interrupt disabled or from its thread.
+ */
+#define MXT_T24_CTRL_ENABLE	(BIT(0) | BIT(1))	/* ENABLE | RPTEN */
+#define MXT_T9_CTRL_RPTEN	BIT(1)
+#define MXT_GESTURE_ACQ_MS	50
+
+static void mxt_release_contacts(struct mxt_data *data)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(data->t9_contacts); i++) {
+		if (data->t9_contacts[i].on) {
+			data->t9_contacts[i].on = false;
+			data->t9_contacts[i].released = true;
+		}
+	}
+	if (data->input_dev && data->multitouch == MXT_TOUCH_MULTI_T9)
+		mxt_input_sync(data);
+}
+
+static int mxt_gesture_enter(struct mxt_data *data, u8 gesture)
+{
+	struct mxt_object *t9 = mxt_get_object(data, MXT_TOUCH_MULTI_T9);
+	struct mxt_object *t24 = mxt_get_object(data, MXT_PROCI_ONETOUCH_T24);
+	u8 acq[2] = { MXT_GESTURE_ACQ_MS, MXT_GESTURE_ACQ_MS };	/* T7 idle, active */
+	int error;
+
+	if (!t9 || !t24 || !data->T7_address)
+		return -ENODEV;
+
+	mxt_release_contacts(data);
+
+	error = __mxt_read_reg(data->client, t9->start_address + MXT_T9_CTRL, 1,
+			       &data->gesture_t9_ctrl);
+	if (!error)
+		error = __mxt_read_reg(data->client, t24->start_address, 1,
+				       &data->gesture_t24_ctrl);
+	if (!error)
+		error = mxt_write_reg(data->client, t24->start_address, MXT_T24_CTRL_ENABLE);
+	if (!error)
+		error = mxt_write_reg(data->client, t9->start_address + MXT_T9_CTRL,
+				      data->gesture_t9_ctrl & ~MXT_T9_CTRL_RPTEN);
+	if (!error)
+		error = __mxt_write_reg(data->client, data->T7_address, sizeof(acq), acq);
+	if (error)
+		return error;
+
+	data->wakeup_gesture = gesture;
+	return 0;
+}
+
+static int mxt_gesture_leave(struct mxt_data *data)
+{
+	struct mxt_object *t9 = mxt_get_object(data, MXT_TOUCH_MULTI_T9);
+	struct mxt_object *t24 = mxt_get_object(data, MXT_PROCI_ONETOUCH_T24);
+	int error;
+
+	if (!data->wakeup_gesture)
+		return 0;
+	data->wakeup_gesture = 0;
+
+	error = mxt_write_reg(data->client, t24->start_address, data->gesture_t24_ctrl);
+	if (!error)
+		error = mxt_write_reg(data->client, t9->start_address + MXT_T9_CTRL,
+				      data->gesture_t9_ctrl);
+	if (!error)
+		error = mxt_set_t7_power_cfg(data, MXT_POWER_CFG_RUN);
+	if (!error)
+		error = mxt_t6_command(data, MXT_COMMAND_CALIBRATE, 1, false);
+	return error;
+}
+
+static void mxt_proc_t24_message(struct mxt_data *data, u8 *message)
+{
+	u8 gesture = message[1] & 0x0f;
+
+	if (!data->wakeup_gesture || gesture != data->wakeup_gesture || !data->input_dev)
+		return;
+
+	if (mxt_gesture_leave(data))
+		dev_err(&data->client->dev, "Failed to leave the wake gesture mode\n");
+
+	input_event(data->input_dev, EV_MSC, MSC_GESTURE, gesture);
+	input_sync(data->input_dev);
+}
+
+static ssize_t mxt_wait_for_gesture_show(struct device *dev, struct device_attribute *attr,
+					 char *buf)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "0x%02x\n", data->wakeup_gesture);
+}
+
+static ssize_t mxt_wait_for_gesture_store(struct device *dev, struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+	u8 gesture;
+	int error;
+
+	error = kstrtou8(buf, 0, &gesture);
+	if (error)
+		return error;
+
+	disable_irq(data->irq);
+	if (!gesture)
+		error = mxt_gesture_leave(data);
+	else if (data->wakeup_gesture)
+		error = -EBUSY;
+	else
+		error = mxt_gesture_enter(data, gesture);
+	enable_irq(data->irq);
+
+	return error ?: count;
+}
+
+/* The touchscreen off (deep sleep) and back on, recalibrated */
+static ssize_t mxt_disable_ts_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", data->ts_disabled);
+}
+
+static ssize_t mxt_disable_ts_store(struct device *dev, struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+	bool disable;
+	int error;
+
+	error = kstrtobool(buf, &disable);
+	if (error)
+		return error;
+
+	disable_irq(data->irq);
+	if (disable && !data->ts_disabled) {
+		mxt_release_contacts(data);
+		error = mxt_set_t7_power_cfg(data, MXT_POWER_CFG_DEEPSLEEP);
+	} else if (!disable && data->ts_disabled) {
+		error = mxt_set_t7_power_cfg(data, MXT_POWER_CFG_RUN);
+		if (!error)
+			error = mxt_t6_command(data, MXT_COMMAND_CALIBRATE, 1, false);
+	}
+	if (!error)
+		data->ts_disabled = disable;
+	enable_irq(data->irq);
+
+	return error ?: count;
+}
+
+/* mce recalibrates on a timer while the wake gesture is armed */
+static ssize_t mxt_calibrate_store(struct device *dev, struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+	int error = mxt_t6_command(data, MXT_COMMAND_CALIBRATE, 1, false);
+
+	return error ?: count;
+}
+
+static DEVICE_ATTR(wait_for_gesture, 0660, mxt_wait_for_gesture_show, mxt_wait_for_gesture_store);
+static DEVICE_ATTR(disable_ts, 0660, mxt_disable_ts_show, mxt_disable_ts_store);
+static DEVICE_ATTR(calibrate, 0200, NULL, mxt_calibrate_store);
+
 static DEVICE_ATTR(fw_version, S_IRUGO, mxt_fw_version_show, NULL);
 static DEVICE_ATTR(hw_version, S_IRUGO, mxt_hw_version_show, NULL);
 static DEVICE_ATTR(object, S_IRUGO, mxt_object_show, NULL);
@@ -3245,6 +3436,9 @@ static struct attribute *mxt_attrs[] = {
 	&dev_attr_hw_version.attr,
 	&dev_attr_object.attr,
 	&dev_attr_update_fw.attr,
+	&dev_attr_wait_for_gesture.attr,
+	&dev_attr_disable_ts.attr,
+	&dev_attr_calibrate.attr,
 	NULL
 };
 
