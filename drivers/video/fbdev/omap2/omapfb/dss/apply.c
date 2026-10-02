@@ -69,6 +69,9 @@ struct ovl_priv_data {
 	 * for the overlay before it is enabled in the HW.
 	 */
 	bool enabling;
+
+	/* omap_dss_request_notify()'s events not yet sent */
+	enum omap_dss_notify_event requested_events;
 };
 
 struct mgr_priv_data {
@@ -192,6 +195,95 @@ static bool mgr_manual_update(struct omap_overlay_manager *mgr)
 
 	return mp->lcd_config.stallmode;
 }
+
+static ATOMIC_NOTIFIER_HEAD(dss_notifier_list);
+
+/* The overlay's requested events that hold now. Called with data_lock held. */
+static enum omap_dss_notify_event ovl_notify_ready(struct omap_overlay *ovl)
+{
+	struct ovl_priv_data *op = get_ovl_priv(ovl);
+	enum omap_dss_notify_event events = op->requested_events;
+	struct mgr_priv_data *mp;
+
+	if (!events || !ovl->manager)
+		return events;
+
+	mp = get_mgr_priv(ovl->manager);
+	if (!mp->enabled || !op->enabled)
+		return events;
+
+	if (ovl_manual_update(ovl)) {
+		/* registers are written when an update starts */
+		if (mp->updating) {
+			events &= ~OMAP_DSS_NOTIFY_UPDATE_OVL;
+			if (op->info_dirty)
+				events &= ~OMAP_DSS_NOTIFY_GO_OVL;
+		}
+	} else if (op->info_dirty || op->shadow_info_dirty) {
+		events = OMAP_DSS_NOTIFY_NONE;
+	}
+
+	return events;
+}
+
+/* Called with data_lock held: from the DISPC irq, an update's start, a request */
+static void dss_run_notifiers(void)
+{
+	int i;
+
+	for (i = 0; i < omap_dss_get_num_overlays(); i++) {
+		struct omap_overlay *ovl = omap_dss_get_overlay(i);
+		enum omap_dss_notify_event events = ovl_notify_ready(ovl);
+
+		if (!events)
+			continue;
+
+		get_ovl_priv(ovl)->requested_events &= ~events;
+		atomic_notifier_call_chain(&dss_notifier_list, events,
+					   (void *)(long)ovl->id);
+	}
+}
+
+int omap_dss_request_notify(enum omap_dss_notify_event events, long ovl_id)
+{
+	struct omap_overlay *ovl;
+	unsigned long flags;
+
+	if (ovl_id < 0 || ovl_id >= omap_dss_get_num_overlays() ||
+	    (events & ~OMAP_DSS_NOTIFY_MASK_OVL))
+		return -EINVAL;
+
+	ovl = omap_dss_get_overlay(ovl_id);
+
+	spin_lock_irqsave(&data_lock, flags);
+
+	/* UPDATE exists only for manual update displays */
+	if ((events & OMAP_DSS_NOTIFY_UPDATE_OVL) &&
+	    (!ovl->manager || !ovl_manual_update(ovl))) {
+		spin_unlock_irqrestore(&data_lock, flags);
+		return -EINVAL;
+	}
+
+	get_ovl_priv(ovl)->requested_events |= events;
+	dss_run_notifiers();
+
+	spin_unlock_irqrestore(&data_lock, flags);
+
+	return 0;
+}
+EXPORT_SYMBOL(omap_dss_request_notify);
+
+int omap_dss_register_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_register(&dss_notifier_list, nb);
+}
+EXPORT_SYMBOL(omap_dss_register_notifier);
+
+int omap_dss_unregister_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_unregister(&dss_notifier_list, nb);
+}
+EXPORT_SYMBOL(omap_dss_unregister_notifier);
 
 static int dss_check_settings_low(struct omap_overlay_manager *mgr,
 		bool applying)
@@ -830,6 +922,8 @@ static void dss_mgr_start_update_compat(struct omap_overlay_manager *mgr)
 	if (!dss_data.irq_enabled && need_isr())
 		dss_register_vsync_isr();
 
+	dss_run_notifiers();
+
 	dispc_mgr_enable_sync(mgr->id);
 
 	spin_unlock_irqrestore(&data_lock, flags);
@@ -929,6 +1023,8 @@ static void dss_apply_irq_handler(void *data, u32 mask)
 
 	if (!need_isr())
 		dss_unregister_vsync_isr();
+
+	dss_run_notifiers();
 
 	spin_unlock(&data_lock);
 }

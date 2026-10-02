@@ -49,6 +49,7 @@
 struct omap_dss_device;
 struct omap_overlay_manager;
 struct dss_lcd_mgr_config;
+struct notifier_block;
 struct snd_aes_iec958;
 struct snd_cea_861_aud_if;
 struct hdmi_avi_infoframe;
@@ -182,6 +183,21 @@ enum omap_dss_output_id {
 	OMAP_DSS_OUTPUT_DSI2	= 1 << 4,
 	OMAP_DSS_OUTPUT_VENC	= 1 << 5,
 	OMAP_DSS_OUTPUT_HDMI	= 1 << 6,
+};
+
+/*
+ * Nokia's DSS notifier, for the SGX driver's flip events. GO: an overlay's new configuration has
+ * reached the hardware (its memory may be reused); UPDATE: the manual update showing it has
+ * completed (manual update displays only). The notifier's data is the overlay id.
+ */
+enum omap_dss_notify_event {
+	OMAP_DSS_NOTIFY_NONE		= 0 << 0,
+	OMAP_DSS_NOTIFY_GO_MGR		= 1 << 0,
+	OMAP_DSS_NOTIFY_UPDATE_MGR	= 2 << 0,
+	OMAP_DSS_NOTIFY_MASK_MGR	= 3 << 0,
+	OMAP_DSS_NOTIFY_GO_OVL		= 1 << 2,
+	OMAP_DSS_NOTIFY_UPDATE_OVL	= 2 << 2,
+	OMAP_DSS_NOTIFY_MASK_OVL	= 3 << 2,
 };
 
 /* DSI */
@@ -797,6 +813,10 @@ void omapdss_default_get_timings(struct omap_dss_device *dssdev,
 
 int omap_dispc_register_isr(omap_dispc_isr_t isr, void *arg, u32 mask);
 int omap_dispc_unregister_isr(omap_dispc_isr_t isr, void *arg, u32 mask);
+
+int omap_dss_register_notifier(struct notifier_block *nb);
+int omap_dss_unregister_notifier(struct notifier_block *nb);
+int omap_dss_request_notify(enum omap_dss_notify_event events, long ovl_id);
 
 int omapdss_compat_init(void);
 void omapdss_compat_uninit(void);
