@@ -603,6 +603,11 @@ int twl_get_hfclk_rate(void)
 }
 EXPORT_SYMBOL_GPL(twl_get_hfclk_rate);
 
+int (*twl4030_vdd_set_voltage)(int id, int uV);
+EXPORT_SYMBOL_GPL(twl4030_vdd_set_voltage);
+int (*twl4030_vdd_get_voltage)(int id);
+EXPORT_SYMBOL_GPL(twl4030_vdd_get_voltage);
+
 /*----------------------------------------------------------------------*/
 
 /*

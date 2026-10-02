@@ -412,17 +412,28 @@ twl4030smps_set_voltage(struct regulator_dev *rdev, int min_uV, int max_uV,
 			unsigned *selector)
 {
 	struct twlreg_info *info = rdev_get_drvdata(rdev);
-	int vsel = DIV_ROUND_UP(min_uV - 600000, 12500);
 
-	twlreg_write(info, TWL_MODULE_PM_RECEIVER, VREG_VOLTAGE_SMPS_4030, vsel);
-
-	return 0;
+	/*
+	 * The PMIC is in SmartReflex mode (twl-core) and ignores VREG_VOLTAGE_SMPS_4030: only the
+	 * SoC's voltage processor sets these, and until it's up (late init) nothing can. Failing
+	 * keeps cpufreq from raising the clock on a voltage that didn't change.
+	 */
+	if (!twl4030_vdd_set_voltage)
+		return -EAGAIN;
+	return twl4030_vdd_set_voltage(info->desc.id, min_uV);
 }
 
 static int twl4030smps_get_voltage(struct regulator_dev *rdev)
 {
 	struct twlreg_info *info = rdev_get_drvdata(rdev);
 	int vsel;
+
+	/* the voltage processor's, once it has set one (the register is the boot value) */
+	if (twl4030_vdd_get_voltage) {
+		vsel = twl4030_vdd_get_voltage(info->desc.id);
+		if (vsel > 0)
+			return vsel;
+	}
 
 	vsel = twlreg_read(info, TWL_MODULE_PM_RECEIVER,
 		VREG_VOLTAGE_SMPS_4030);

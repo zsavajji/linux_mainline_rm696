@@ -230,6 +230,22 @@ int __init omap4_twl_init(void)
 	return 0;
 }
 
+/* The TWL's VDD1/VDD2 regulators (cpufreq's vdd) scale through the voltage processor */
+static struct voltagedomain *omap3_twl_voltdm(int id)
+{
+	return voltdm_lookup(id == TWL4030_REG_VDD1 ? "mpu_iva" : "core");
+}
+
+static int omap3_twl_set_voltage(int id, int uV)
+{
+	return voltdm_scale(omap3_twl_voltdm(id), uV);
+}
+
+static int omap3_twl_get_voltage(int id)
+{
+	return voltdm_get_voltage(omap3_twl_voltdm(id));
+}
+
 int __init omap3_twl_init(void)
 {
 	struct voltagedomain *voltdm;
@@ -242,6 +258,9 @@ int __init omap3_twl_init(void)
 
 	voltdm = voltdm_lookup("core");
 	omap_voltage_register_pmic(voltdm, &omap3_core_pmic);
+
+	twl4030_vdd_set_voltage = omap3_twl_set_voltage;
+	twl4030_vdd_get_voltage = omap3_twl_get_voltage;
 
 	return 0;
 }

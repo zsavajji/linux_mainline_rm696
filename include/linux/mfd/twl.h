@@ -203,6 +203,14 @@ int twl_get_type(void);
 int twl_get_version(void);
 int twl_get_hfclk_rate(void);
 
+/*
+ * OMAP3: twl-core runs the PMIC in SmartReflex mode, where VDD1/VDD2 ignore their VSEL registers
+ * and take their voltage from the SoC's voltage processor (over the SmartReflex I2C) instead;
+ * mach-omap2 (omap_twl.c) sets these so the regulators scale through it.
+ */
+extern int (*twl4030_vdd_set_voltage)(int id, int uV);
+extern int (*twl4030_vdd_get_voltage)(int id);
+
 int twl6030_interrupt_unmask(u8 bit_mask, u8 offset);
 int twl6030_interrupt_mask(u8 bit_mask, u8 offset);
 
