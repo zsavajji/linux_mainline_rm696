@@ -13,6 +13,7 @@
 #include <linux/err.h>
 #include <linux/fb.h>
 #include <linux/gpio/consumer.h>
+#include <video/of_display_timing.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/mod_devicetable.h>
@@ -40,6 +41,12 @@ struct panel_drv_data {
 	struct omap_dss_device *in;
 
 	struct omap_video_timings timings;
+	/* the visible area's offset in the panel's frame; DCS address mode, 0 = the panel's default */
+	u16 x_offset, y_offset;
+	u8 address_mode;
+	/* the panel's rows to show when its frame is larger than the visible area (DCS partial mode) */
+	u16 partial_start, partial_rows;
+	u8 rotate;	/* the DT rotation in quarter turns */
 
 	struct platform_device *pdev;
 
@@ -193,10 +200,10 @@ static int dsicm_set_update_window(struct panel_drv_data *ddata,
 {
 	struct omap_dss_device *in = ddata->in;
 	int r;
-	u16 x1 = x;
-	u16 x2 = x + w - 1;
-	u16 y1 = y;
-	u16 y2 = y + h - 1;
+	u16 x1 = x + ddata->x_offset;
+	u16 x2 = x1 + w - 1;
+	u16 y1 = y + ddata->y_offset;
+	u16 y2 = y1 + h - 1;
 
 	u8 buf[5];
 	buf[0] = MIPI_DCS_SET_COLUMN_ADDRESS;
@@ -610,6 +617,26 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 	r = dsicm_get_id(ddata, &id1, &id2, &id3);
 	if (r)
 		goto err;
+
+	if (ddata->address_mode) {
+		r = dsicm_dcs_write_1(ddata, MIPI_DCS_SET_ADDRESS_MODE, ddata->address_mode);
+		if (r)
+			goto err;
+	}
+
+	/* Show only the visible rows, as the N9's stock driver does: the rest of the panel's frame is
+	 * never written, and would show as garbage */
+	if (ddata->partial_rows) {
+		u16 s = ddata->partial_start, e = s + ddata->partial_rows - 1;
+		u8 buf[5] = { MIPI_DCS_SET_PARTIAL_ROWS, s >> 8, s & 0xff, e >> 8, e & 0xff };
+
+		r = in->ops.dsi->dcs_write(in, ddata->channel, buf, sizeof(buf));
+		if (r)
+			goto err;
+		r = dsicm_dcs_write_0(ddata, MIPI_DCS_ENTER_PARTIAL_MODE);
+		if (r)
+			goto err;
+	}
 
 	r = dsicm_dcs_write_1(ddata, DCS_BRIGHTNESS, 0xff);
 	if (r)
@@ -1089,6 +1116,36 @@ static void dsicm_ulps_work(struct work_struct *work)
 	mutex_unlock(&ddata->lock);
 }
 
+/* rotate and mirror in sysfs, which Harmattan's X driver reads: the DT's, not changeable */
+static u8 dsicm_get_rotate(struct omap_dss_device *dssdev)
+{
+	return to_panel_data(dssdev)->rotate;
+}
+
+static int dsicm_set_rotate(struct omap_dss_device *dssdev, u8 rotate)
+{
+	return rotate == to_panel_data(dssdev)->rotate ? 0 : -EINVAL;
+}
+
+/* The timings as the panel's frame is (portrait), before rotate, as Nokia's driver reports them:
+ * Harmattan's X driver applies rotate to them itself */
+static void dsicm_get_timings(struct omap_dss_device *dssdev, struct omap_video_timings *t)
+{
+	*t = dssdev->panel.timings;
+	if (to_panel_data(dssdev)->rotate & 1)
+		swap(t->x_res, t->y_res);
+}
+
+static bool dsicm_get_mirror(struct omap_dss_device *dssdev)
+{
+	return false;
+}
+
+static int dsicm_set_mirror(struct omap_dss_device *dssdev, bool enable)
+{
+	return enable ? -EINVAL : 0;
+}
+
 static struct omap_dss_driver dsicm_ops = {
 	.connect	= dsicm_connect,
 	.disconnect	= dsicm_disconnect,
@@ -1106,6 +1163,11 @@ static struct omap_dss_driver dsicm_ops = {
 	.get_te		= dsicm_get_te,
 
 	.memory_read	= dsicm_memory_read,
+	.get_timings	= dsicm_get_timings,
+	.get_rotate	= dsicm_get_rotate,
+	.set_rotate	= dsicm_set_rotate,
+	.get_mirror	= dsicm_get_mirror,
+	.set_mirror	= dsicm_set_mirror,
 };
 
 static int dsicm_probe(struct platform_device *pdev)
@@ -1115,6 +1177,7 @@ static int dsicm_probe(struct platform_device *pdev)
 	struct backlight_device *bldev = NULL;
 	struct device *dev = &pdev->dev;
 	struct omap_dss_device *dssdev;
+	struct display_timing dt;
 	int r;
 
 	dev_dbg(dev, "probe\n");
@@ -1136,9 +1199,40 @@ static int dsicm_probe(struct platform_device *pdev)
 		return r;
 	}
 
-	ddata->timings.x_res = 864;
-	ddata->timings.y_res = 480;
-	ddata->timings.pixelclock = 864 * 480 * 60;
+	/* The frame from the DT's panel-timing (the N9 and N950 panels are 480x864, portrait), else the
+	 * Taal panel's 864x480 */
+	if (of_get_display_timing(pdev->dev.of_node, "panel-timing", &dt) == 0) {
+		u32 rotation = 0;
+
+		ddata->timings.x_res = dt.hactive.typ;
+		ddata->timings.y_res = dt.vactive.typ;
+		ddata->timings.pixelclock = dt.pixelclock.typ;
+		/* The back porches place the visible area in the panel's frame (the N9 shows 854 of its
+		 * 864 rows); DT rotation 90 or 270 makes it landscape through the panel's row/column
+		 * exchange, as the N9's stock driver does (its rotate 1) */
+		ddata->x_offset = dt.hback_porch.typ;
+		ddata->y_offset = dt.vback_porch.typ;
+		if (dt.vback_porch.typ || dt.vfront_porch.typ) {
+			ddata->partial_start = dt.vback_porch.typ;
+			ddata->partial_rows = dt.vactive.typ;
+		}
+		of_property_read_u32(pdev->dev.of_node, "rotation", &rotation);
+		if (rotation == 90 || rotation == 270) {
+			swap(ddata->timings.x_res, ddata->timings.y_res);
+			swap(ddata->x_offset, ddata->y_offset);
+			ddata->address_mode = rotation == 90 ? 0x60 : 0xa0;	/* MV|MX, MV|MY */
+			ddata->rotate = rotation / 90;
+		}
+	} else {
+		ddata->timings.x_res = 864;
+		ddata->timings.y_res = 480;
+	}
+	/*
+	 * DISPC's pixel clock, the DT's, else a frame per 60th of a second (DSI asks DISPC for 1.5x
+	 * that, and sets its own clock to match, up to its 300 MHz maximum)
+	 */
+	if (!ddata->timings.pixelclock)
+		ddata->timings.pixelclock = ddata->timings.x_res * ddata->timings.y_res * 60;
 
 	dssdev = &ddata->dssdev;
 	dssdev->dev = dev;
