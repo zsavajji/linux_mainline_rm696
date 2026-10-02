@@ -312,3 +312,10 @@
 		vdd-supply = <&vio>;
 	};
 };
+
+/* The charger's presence for BME (twl5031-bcc.patch); BME drives the charger itself */
+&twl {
+	bcc {
+		compatible = "ti,twl5031-bcc";
+	};
+};

@@ -79,6 +79,7 @@
 #define TWL4030_BASEADD_KEYPAD		0x00D2
 
 #define TWL5031_BASEADD_ACCESSORY	0x0074 /* Replaces Main Charge */
+#define TWL5031_BASEADD_BCC		0x00AA /* battery charging controller */
 #define TWL5031_BASEADD_INTERRUPTS	0x00B9 /* Different than TWL4030's
 						  one */
 
@@ -198,6 +199,7 @@ static struct twl_mapping twl4030_map[] = {
 
 	{ 2, TWL5031_BASEADD_ACCESSORY },
 	{ 2, TWL5031_BASEADD_INTERRUPTS },
+	{ 2, TWL5031_BASEADD_BCC },
 };
 
 static const struct reg_default twl4030_49_defaults[] = {
