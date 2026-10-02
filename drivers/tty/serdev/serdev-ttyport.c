@@ -119,6 +119,12 @@ static int ttyport_open(struct serdev_controller *ctrl)
 	ktermios = tty->termios;
 	ktermios.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP |
 			      INLCR | IGNCR | ICRNL | IXON);
+	/*
+	 * A break is noise to a framed protocol: dropped.
+	 * The Nokia N9's Bluetooth chip holds its TX low while it sleeps, and the zeros read off that
+	 * line broke H4 framing (an "ACL packet" of 3930 bytes, events lost after it)
+	 */
+	ktermios.c_iflag |= IGNBRK;
 	ktermios.c_oflag &= ~OPOST;
 	ktermios.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
 	ktermios.c_cflag &= ~(CSIZE | PARENB);
