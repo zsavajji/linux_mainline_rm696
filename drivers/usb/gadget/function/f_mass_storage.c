@@ -2786,10 +2786,20 @@ error_release:
 }
 EXPORT_SYMBOL_GPL(fsg_common_set_num_buffers);
 
+/* A LUN's sysfs device, also under Nokia's 2.6.32 name (gadget-lunN: Harmattan's usb_moded) */
+static void fsg_lun_unregister(struct fsg_lun *lun)
+{
+	char link[32];
+
+	snprintf(link, sizeof(link), "gadget-%s", dev_name(&lun->dev));
+	sysfs_remove_link(&lun->dev.parent->kobj, link);
+	device_unregister(&lun->dev);
+}
+
 void fsg_common_remove_lun(struct fsg_lun *lun)
 {
 	if (device_is_registered(&lun->dev))
-		device_unregister(&lun->dev);
+		fsg_lun_unregister(lun);
 	fsg_lun_close(lun);
 	kfree(lun);
 }
@@ -2926,6 +2936,13 @@ int fsg_common_create_lun(struct fsg_common *common, struct fsg_lun_config *cfg,
 			put_device(&lun->dev);
 			goto error_sysfs;
 		}
+		{
+			char link[32];
+
+			snprintf(link, sizeof(link), "gadget-%s", name);
+			if (sysfs_create_link(&lun->dev.parent->kobj, &lun->dev.kobj, link))
+				pr_warn("LUN%d: no %s link\n", id, link);
+		}
 	}
 
 	common->luns[id] = lun;
@@ -2954,7 +2971,7 @@ int fsg_common_create_lun(struct fsg_common *common, struct fsg_lun_config *cfg,
 
 error_lun:
 	if (device_is_registered(&lun->dev))
-		device_unregister(&lun->dev);
+		fsg_lun_unregister(lun);
 	common->luns[id] = NULL;
 error_sysfs:
 	kfree(lun);
@@ -3019,7 +3036,7 @@ static void fsg_common_release(struct fsg_common *common)
 			continue;
 		fsg_lun_close(lun);
 		if (device_is_registered(&lun->dev))
-			device_unregister(&lun->dev);
+			fsg_lun_unregister(lun);
 		kfree(lun);
 	}
 

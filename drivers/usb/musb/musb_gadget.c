@@ -19,6 +19,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 
+#include <linux/platform_device.h>
+
 #include "musb_core.h"
 #include "musb_trace.h"
 
@@ -1768,6 +1770,47 @@ static inline void musb_g_init_endpoints(struct musb *musb)
 /* called once during driver setup to initialize and link into
  * the driver model; memory is zeroed.
  */
+/*
+ * Nokia's 2.6.32 paths, which Harmattan's usb_moded uses: /sys/devices/platform/musb_hdrc is the
+ * controller, its gadget/ the gadget (mass storage's gadget-lunN/{file,nofua}), and
+ * gadget/softconnect connects (1) or disconnects (0) the bound gadget driver
+ */
+static ssize_t softconnect_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", container_of(dev, struct usb_gadget, dev)->connected);
+}
+
+static ssize_t softconnect_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t n)
+{
+	struct usb_gadget *g = container_of(dev, struct usb_gadget, dev);
+	bool on;
+	int ret;
+
+	ret = kstrtobool(buf, &on);
+	if (ret)
+		return ret;
+	if (!gadget_to_musb(g)->gadget_driver)
+		return -ENODEV;
+	ret = on ? usb_gadget_connect(g) : usb_gadget_disconnect(g);
+	return ret ? ret : n;
+}
+static DEVICE_ATTR_RW(softconnect);
+
+static void musb_compat_sysfs(struct musb *musb, bool add)
+{
+	if (!add) {
+		device_remove_file(&musb->g.dev, &dev_attr_softconnect);
+		sysfs_remove_link(&musb->controller->kobj, "gadget");
+		sysfs_remove_link(&platform_bus.kobj, "musb_hdrc");
+		return;
+	}
+	if (sysfs_create_link(&platform_bus.kobj, &musb->controller->kobj, "musb_hdrc") ||
+	    sysfs_create_link(&musb->controller->kobj, &musb->g.dev.kobj, "gadget") ||
+	    device_create_file(&musb->g.dev, &dev_attr_softconnect))
+		dev_warn(musb->controller, "no 2.6.32 sysfs paths (musb_hdrc/gadget)\n");
+}
+
 int musb_gadget_setup(struct musb *musb)
 {
 	int status;
@@ -1797,6 +1840,7 @@ int musb_gadget_setup(struct musb *musb)
 	status = usb_add_gadget_udc(musb->controller, &musb->g);
 	if (status)
 		goto err;
+	musb_compat_sysfs(musb, true);
 
 	return 0;
 err:
@@ -1811,6 +1855,7 @@ void musb_gadget_cleanup(struct musb *musb)
 		return;
 
 	cancel_delayed_work_sync(&musb->gadget_work);
+	musb_compat_sysfs(musb, false);
 	usb_del_gadget_udc(&musb->g);
 }
 
