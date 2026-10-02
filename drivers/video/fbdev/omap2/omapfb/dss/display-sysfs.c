@@ -195,6 +195,32 @@ static ssize_t display_mirror_store(struct omap_dss_device *dssdev,
 	return size;
 }
 
+/*
+ * update_mode, from Nokia's omapdss: Harmattan's X driver reads it. 1 = auto update, 2 = manual (DSI
+ * command mode); only the display's own mode can be set, as there.
+ */
+static int display_update_mode(struct omap_dss_device *dssdev)
+{
+	return dssdev->caps & OMAP_DSS_DISPLAY_CAP_MANUAL_UPDATE ? 2 : 1;
+}
+
+static ssize_t display_update_mode_show(struct omap_dss_device *dssdev, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", display_update_mode(dssdev));
+}
+
+static ssize_t display_update_mode_store(struct omap_dss_device *dssdev,
+	const char *buf, size_t size)
+{
+	int mode, r;
+
+	r = kstrtoint(buf, 0, &mode);
+	if (r)
+		return r;
+
+	return mode == display_update_mode(dssdev) ? size : -EINVAL;
+}
+
 static ssize_t display_wss_show(struct omap_dss_device *dssdev, char *buf)
 {
 	unsigned int wss;
@@ -254,10 +280,13 @@ static DISPLAY_ATTR(mirror, S_IRUGO|S_IWUSR,
 		display_mirror_show, display_mirror_store);
 static DISPLAY_ATTR(wss, S_IRUGO|S_IWUSR,
 		display_wss_show, display_wss_store);
+static DISPLAY_ATTR(update_mode, S_IRUGO|S_IWUSR,
+		display_update_mode_show, display_update_mode_store);
 
 static struct attribute *display_sysfs_attrs[] = {
 	&display_attr_name.attr,
 	&display_attr_display_name.attr,
+	&display_attr_update_mode.attr,
 	&display_attr_enabled.attr,
 	&display_attr_tear_elim.attr,
 	&display_attr_timings.attr,
