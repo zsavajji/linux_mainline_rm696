@@ -149,6 +149,8 @@ struct nokia_bt_dev {
 	bool initialized;
 	bool tx_enabled;
 	bool rx_enabled;
+
+	unsigned long rx_last;
 };
 
 static int nokia_enqueue(struct hci_uart *hu, struct sk_buff *skb);
@@ -659,20 +661,66 @@ static const struct h4_recv_pkt nokia_recv_pkts[] = {
 	{ NOKIA_RECV_RADIO,	.recv = nokia_recv_radio },
 };
 
+/* ponytail: temporary, every received chunk in the kernel log (rx_dump=1), to find the framing */
+static bool rx_dump;
+module_param(rx_dump, bool, 0644);
+
+static bool nokia_pkt_type_known(u8 type)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(nokia_recv_pkts); i++)
+		if (nokia_recv_pkts[i].type == type)
+			return true;
+	return false;
+}
+
 static int nokia_recv(struct hci_uart *hu, const void *data, int count)
 {
 	struct nokia_bt_dev *btdev = hu->priv;
 	struct device *dev = &btdev->serdev->dev;
+	const u8 *p = data;
 	int err;
 
 	if (!test_bit(HCI_UART_REGISTERED, &hu->flags))
 		return -EUNATCH;
 
-	btdev->rx_skb = h4_recv_buf(hu, btdev->rx_skb, data, count,
+	if (rx_dump)
+		print_hex_dump(KERN_INFO, "nokia-bt rx: ", DUMP_PREFIX_NONE, 32, 1, data, count, false);
+
+	/*
+	 * A frame begun on a corrupt byte (e.g. a lost packet type, the rest read as a header) waits
+	 * for bytes that never come and swallows the next frames into it: command replies (tx
+	 * timeouts), the next power-on's set-up (EIO) until a reboot. The chip sends a frame in one
+	 * burst, so one still incomplete 500 ms after its last bytes is dropped.
+	 */
+	if (btdev->rx_skb && time_after(jiffies, btdev->rx_last + msecs_to_jiffies(500))) {
+		kfree_skb(btdev->rx_skb);
+		btdev->rx_skb = NULL;
+		hu->hdev->stat.err_rx++;
+	}
+	btdev->rx_last = jiffies;
+
+	/*
+	 * As hci_h4p, a byte between packets that is no packet type is dropped alone (h4_recv_buf()
+	 * would drop the whole chunk with it)
+	 */
+	while (count && !btdev->rx_skb && !hu->padding && !nokia_pkt_type_known(*p)) {
+		hu->hdev->stat.err_rx++;
+		p++;
+		count--;
+	}
+	if (!count)
+		return 0;
+
+	btdev->rx_skb = h4_recv_buf(hu, btdev->rx_skb, p, count,
 				    nokia_recv_pkts, ARRAY_SIZE(nokia_recv_pkts));
 	if (IS_ERR(btdev->rx_skb)) {
 		err = PTR_ERR(btdev->rx_skb);
 		dev_err(dev, "Frame reassembly failed (%d)", err);
+		/* ponytail: temporary, to see what derails the stream (remove once known) */
+		print_hex_dump(KERN_ERR, "nokia-bt rx: ", DUMP_PREFIX_OFFSET, 16, 1, p,
+			       min(count, 48), false);
 		btdev->rx_skb = NULL;
 		return err;
 	}
@@ -718,6 +766,18 @@ static const struct hci_uart_proto nokia_proto = {
 	.setup		= nokia_setup,
 	.manufacturer	= 1,
 };
+
+/* Bluetooth off: the chip held in reset, as stock's hci_h4p (the set-up resets it at power-on) */
+static int nokia_shutdown(struct hci_dev *hdev)
+{
+	struct hci_uart *hu = hci_get_drvdata(hdev);
+	struct nokia_bt_dev *btdev = hu->priv;
+
+	btdev->initialized = false;
+	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
+	gpiod_set_value_cansleep(btdev->reset, 1);
+	return 0;
+}
 
 static int nokia_bluetooth_serdev_probe(struct serdev_device *serdev)
 {
@@ -792,6 +852,13 @@ static int nokia_bluetooth_serdev_probe(struct serdev_device *serdev)
 		return err;
 	}
 
+	/*
+	 * The UART port closed while Bluetooth is off (open, serdev keeps UART2 and with it the CORE
+	 * domain from idling), the chip off; the set-up (firmware) runs at each power-on, as stock
+	 */
+	hci_set_quirk(btdev->hu.hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
+	btdev->hu.hdev->shutdown = nokia_shutdown;
+
 	return 0;
 }
 
@@ -802,19 +869,19 @@ static void nokia_bluetooth_serdev_remove(struct serdev_device *serdev)
 	hci_uart_unregister_device(&btdev->hu);
 }
 
+/*
+ * Flow control stays as the set-up leaves it (RTS up) while the chip sleeps: it wakes on its own
+ * (inquiry results, Inquiry Complete) and, finding RTS low, loses its first two bytes before a
+ * resume raises it (a threaded IRQ, then an async resume; stock's hci_h4p raised it from the
+ * hard IRQ). Nor may these touch the port: it's closed while Bluetooth is off (probe).
+ */
 static int nokia_bluetooth_runtime_suspend(struct device *dev)
 {
-	struct serdev_device *serdev = to_serdev_device(dev);
-
-	nokia_flow_control(serdev, false);
 	return 0;
 }
 
 static int nokia_bluetooth_runtime_resume(struct device *dev)
 {
-	struct serdev_device *serdev = to_serdev_device(dev);
-
-	nokia_flow_control(serdev, true);
 	return 0;
 }
 
