@@ -75,6 +75,10 @@
 #define WBUF_SIZE         8
 #define DEVORIG_BUF_SIZE  24
 
+bool credp_open_mode(void);
+/* sgx: the enforcement asked for in open mode, read back but not applied */
+static unsigned long open_enforce;
+
 /* "enforce" file operations */
 static ssize_t read_enforce(struct file *file, char __user *user_buf,
 			    size_t count, loff_t *ppos)
@@ -93,6 +97,7 @@ static ssize_t read_enforce(struct file *file, char __user *user_buf,
 		val |= DATA_CHECK_BIT;
 	if (valinfo.attribmode)
 		val |= ATTRIB_CHECK_BIT;
+	val |= open_enforce;
 	r = snprintf(buf, sizeof(buf), "0x%x\n", val);
 	return simple_read_from_buffer(user_buf, count, ppos, buf, r + 1);
 }
@@ -115,6 +120,16 @@ static ssize_t write_enforce(struct file *file, const char __user *user_buf,
 	if (r || (val > VALIDATOR_ENFORCE_ALL)) {
 		pr_err("Aegis: bad enforce input: %s\n", buf);
 		return -EINVAL;
+	}
+	/*
+	 * sgx: open mode (aegis.mode=open, credp.c): integrity checks log their
+	 * failures but deny nothing
+	 */
+	if (credp_open_mode()) {
+		if (val != open_enforce)
+			pr_info("Aegis: open mode, enforce 0x%lx not applied\n", val);
+		open_enforce = val;
+		val = 0;
 	}
 	valinfo.mode       = (val & HASH_CHECK_BIT)   ? 1 : 0;
 	valinfo.sidmode    = (val & SID_CHECK_BIT)    ? 1 : 0;

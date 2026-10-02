@@ -118,6 +118,12 @@ static int __init set_aegis_mode(char *s)
 	return 1;
 }
 __setup("aegis.mode=", set_aegis_mode);
+
+/* sgx: open mode for the validator too (validator.c) */
+bool credp_open_mode(void)
+{
+	return open_mode;
+}
 #define SECURE_AEGIS_LOCKED 17
 
 /* The set of securebits locked and managed by Aegis */

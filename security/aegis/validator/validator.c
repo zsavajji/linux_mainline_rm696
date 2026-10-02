@@ -262,6 +262,8 @@ static void delete_from_verification_cache(struct inode *inode)
  * Mount point of the volume is put as a parameter to invoked application.
  * Return zero for success and negative value for an error.
  */
+bool credp_open_mode(void);
+
 static int call_init_helper(const char *path)
 {
 	char *argv[3];
@@ -290,8 +292,11 @@ static int call_init_helper(const char *path)
 			 * If this is non-HS device or R&D certificate is
 			 * present disable Validator if userspace helper
 			 * invocation failed.
+			 *
+			 * sgx: in open mode too (aegis.mode=open, credp.c):
+			 * no integrity checks then, rather than a panic.
 			 */
-			if (check_rd_certificate() == 0) {
+			if (check_rd_certificate() == 0 || credp_open_mode()) {
 				pr_info("Aegis: disabled (%d)\n", rv);
 				valinfo.g_init = 0;
 			}
@@ -920,7 +925,12 @@ static int process_measurement(struct file *file, int hook,
 	if (retval < 0) {
 		pr_err("Aegis: %s verification failed (%s)\n",
 		       file->f_path.dentry->d_name.name, reasonmsg(reason));
-		notify_userspace(file, hook, reason);
+		/*
+		 * sgx: not in open mode (aegis.mode=open, credp.c): Harmattan's
+		 * listener enters MALF ("SECURITY <process> <file>") and reboots
+		 */
+		if (!credp_open_mode())
+			notify_userspace(file, hook, reason);
 	}
 	if (allow_write_on_exit)
 		allow_write_access_file(file);

@@ -314,6 +314,8 @@ void validator_modlist_delete(void *ptr)
  *
  * Return 0 for success and negative value for an error
  */
+bool credp_open_mode(void);
+
 int validator_kmod_check(const void *vbuf, unsigned long len)
 {
 	char digest[SHA1_HASH_LENGTH];
@@ -329,5 +331,6 @@ int validator_kmod_check(const void *vbuf, unsigned long len)
 	r = validator_modlist_entry(digest);
 	if (r)
 		pr_err("Aegis: module verification failed\n");
-	return r;
+	/* sgx: open mode (aegis.mode=open, credp.c) loads modules off the whitelist */
+	return credp_open_mode() ? 0 : r;
 }
