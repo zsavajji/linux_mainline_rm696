@@ -312,6 +312,12 @@ struct mxt_data {
 	u8 last_message_count;
 	u8 num_touchids;
 	u8 multitouch;
+	/* T9's contacts, reported in multitouch protocol A (mxt_t9_report) */
+	struct mxt_t9_contact {
+		bool on, released;
+		int x, y;
+		u8 area, amplitude;
+	} t9_contacts[16];
 	struct t7_config t7_cfg;
 	struct mxt_dbg dbg;
 	struct regulator_bulk_data regulators[2];
@@ -827,17 +833,62 @@ static void mxt_input_button(struct mxt_data *data, u8 *message)
 	}
 }
 
+/*
+ * T9's contacts in multitouch protocol A, as Nokia's N9 driver reported them: Harmattan's X input
+ * driver (mtev) takes a contact per SYN_MT_REPORT and ignores slots. Tracking ID = the mXT's contact
+ * number (mcompositor takes ID 0 as the primary touch). Single touch from the first contact.
+ * Lift-off as Nokia's too: the released contact once more at its last position, then a frame with
+ * BTN_TOUCH 0 alone, never an empty SYN_MT_REPORT (which mtev can take for a contact at 0,0: on the
+ * portrait top edge, where it ended top swipes); no coordinate 0 either (Nokia clamped it to 1).
+ */
+static void mxt_t9_report(struct mxt_data *data)
+{
+	struct input_dev *input_dev = data->input_dev;
+	struct mxt_t9_contact *c, *first = NULL;
+	bool down = false;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(data->t9_contacts); i++) {
+		c = &data->t9_contacts[i];
+		if (!c->on && !c->released)
+			continue;
+		if (!first)
+			first = c;
+		down |= c->on;
+		c->released = false;
+		input_report_abs(input_dev, ABS_MT_TRACKING_ID, i);
+		touchscreen_report_pos(input_dev, &data->prop, max(c->x, 1), max(c->y, 1), true);
+		input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, c->area);
+		input_report_abs(input_dev, ABS_MT_PRESSURE, c->amplitude);
+		input_mt_sync(input_dev);
+	}
+
+	if (first) {
+		input_report_key(input_dev, BTN_TOUCH, 1);
+		touchscreen_report_pos(input_dev, &data->prop, max(first->x, 1), max(first->y, 1), false);
+		input_report_abs(input_dev, ABS_PRESSURE, first->amplitude);
+		if (down)
+			return;
+		input_sync(input_dev);	/* the lift-off frame; the caller syncs the next */
+	}
+	input_report_key(input_dev, BTN_TOUCH, 0);
+	input_report_abs(input_dev, ABS_PRESSURE, 0);
+}
+
 static void mxt_input_sync(struct mxt_data *data)
 {
-	input_mt_report_pointer_emulation(data->input_dev,
-					  data->t19_num_keys);
+	if (data->multitouch == MXT_TOUCH_MULTI_T9)
+		mxt_t9_report(data);
+	else
+		input_mt_report_pointer_emulation(data->input_dev,
+						  data->t19_num_keys);
 	input_sync(data->input_dev);
 }
 
 static void mxt_proc_t9_message(struct mxt_data *data, u8 *message)
 {
 	struct device *dev = &data->client->dev;
-	struct input_dev *input_dev = data->input_dev;
+	struct mxt_t9_contact *c;
 	int id;
 	u8 status;
 	int x;
@@ -872,7 +923,9 @@ static void mxt_proc_t9_message(struct mxt_data *data, u8 *message)
 		(status & MXT_T9_UNGRIP) ? 'U' : '.',
 		x, y, area, amplitude);
 
-	input_mt_slot(input_dev, id);
+	if (id < 0 || id >= ARRAY_SIZE(data->t9_contacts))
+		return;
+	c = &data->t9_contacts[id];
 
 	if (status & MXT_T9_DETECT) {
 		/*
@@ -880,8 +933,10 @@ static void mxt_proc_t9_message(struct mxt_data *data, u8 *message)
 		 * the status messages, indicating all the events that
 		 * have happened.
 		 */
-		if (status & MXT_T9_RELEASE) {
-			input_mt_report_slot_inactive(input_dev);
+		if ((status & MXT_T9_RELEASE) && c->on) {
+			/* released and pressed again: report the release first */
+			c->on = false;
+			c->released = true;
 			mxt_input_sync(data);
 		}
 
@@ -890,13 +945,16 @@ static void mxt_proc_t9_message(struct mxt_data *data, u8 *message)
 			amplitude = MXT_PRESSURE_DEFAULT;
 
 		/* Touch active */
-		input_mt_report_slot_state(input_dev, MT_TOOL_FINGER, 1);
-		touchscreen_report_pos(input_dev, &data->prop, x, y, true);
-		input_report_abs(input_dev, ABS_MT_PRESSURE, amplitude);
-		input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, area);
+		c->on = true;
+		c->x = x;
+		c->y = y;
+		c->area = area;
+		c->amplitude = amplitude;
 	} else {
-		/* Touch no longer active, close out slot */
-		input_mt_report_slot_inactive(input_dev);
+		/* Touch no longer active: reported once more, at its last position */
+		if (c->on)
+			c->released = true;
+		c->on = false;
 	}
 
 	data->update_input = true;
@@ -2166,11 +2224,19 @@ static int mxt_initialize_input_device(struct mxt_data *data)
 		mt_flags |= INPUT_MT_DIRECT;
 	}
 
-	/* For multi touch */
-	error = input_mt_init_slots(input_dev, num_mt_slots, mt_flags);
-	if (error) {
-		dev_err(dev, "Error %d initialising slots\n", error);
-		goto err_free_mem;
+	/* For multi touch: T9 in protocol A, without slots (mxt_t9_report) */
+	if (data->multitouch == MXT_TOUCH_MULTI_T9) {
+		input_set_abs_params(input_dev, ABS_MT_TRACKING_ID, 0,
+				     min_t(unsigned int, num_mt_slots,
+					   ARRAY_SIZE(data->t9_contacts)) - 1, 0, 0);
+		if (mt_flags & INPUT_MT_DIRECT)
+			__set_bit(INPUT_PROP_DIRECT, input_dev->propbit);
+	} else {
+		error = input_mt_init_slots(input_dev, num_mt_slots, mt_flags);
+		if (error) {
+			dev_err(dev, "Error %d initialising slots\n", error);
+			goto err_free_mem;
+		}
 	}
 
 	if (data->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100) {
