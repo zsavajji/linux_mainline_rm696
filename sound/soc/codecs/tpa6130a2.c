@@ -285,7 +285,8 @@ static int tpa6130a2_probe(struct i2c_client *client)
 #if IS_ENABLED(CONFIG_OF)
 static const struct of_device_id tpa6130a2_of_match[] = {
 	{ .compatible = "ti,tpa6130a2", },
-	{ .compatible = "ti,tpa6140a2" },
+	/* the model picks its volume control: without it a TPA6140A2 got the 6130A2 one */
+	{ .compatible = "ti,tpa6140a2", .data = (void *)TPA6140A2 },
 	{},
 };
 MODULE_DEVICE_TABLE(of, tpa6130a2_of_match);

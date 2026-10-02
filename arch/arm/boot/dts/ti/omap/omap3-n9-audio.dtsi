@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * The N9's audio as its stock board files had it (board-rm696-audio.c, board-rm696-peripherals.c):
+ * the TWL5031's codec on McBSP3 and a TLV320DAC33 on McBSP2 into a TPA6140A2 headphone amp, and the
+ * Bluetooth chip's PCM on McBSP4, as the three sound cards of sound/soc/ti/dfl61.c. NOLO leaves the
+ * McBSP2/3 pads and McBSP4's (on the GPMC nCS4-7 pads) in McBSP mode.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	sound-twl4030 {
+		compatible = "nokia,dfl61-twl4030";
+		nokia,mcbsp = <&mcbsp3>;
+		ihf-gpios = <&twl_gpio 7 GPIO_ACTIVE_HIGH>;	/* the IHF speaker's amp */
+		jack-gpios = <&twl_gpio 0 GPIO_ACTIVE_HIGH>;	/* AvPlugDet: high when plugged */
+		io-channels = <&twl_madc 10>;			/* ADCIN10: the headset mic line */
+		io-channel-names = "hsmic";
+	};
+
+	sound-dac33 {
+		compatible = "nokia,dfl61-dac33";
+		nokia,mcbsp = <&mcbsp2>;
+		nokia,audio-codec = <&dac33>;
+		nokia,headphone-amplifier = <&tpa6140a2>;
+	};
+
+	sound-bt {
+		compatible = "nokia,dfl61-wl1273";
+		nokia,mcbsp = <&mcbsp4>;
+		nokia,audio-codec = <&bt_sco>;
+	};
+
+	bt_sco: bt-sco {
+		compatible = "linux,bt-sco";
+		#sound-dai-cells = <0>;
+	};
+};
+
+/* The AV jack in audio mode (TVOUT_EN low), as Nokia's twl5031-aci set it at probe */
+&gpio2 {
+	tvout-en-hog {
+		gpio-hog;
+		gpios = <8 GPIO_ACTIVE_HIGH>;	/* gpio 40 */
+		output-low;
+		line-name = "TVOUT_EN";
+	};
+};
+
+&mcbsp2 {
+	status = "okay";
+};
+
+&mcbsp3 {
+	status = "okay";
+};
+
+&mcbsp4 {
+	status = "okay";
+};
+
+&twl {
+	twl_audio: audio {
+		compatible = "ti,twl4030-audio";
+
+		codec {
+			ti,ramp_delay_value = <2>;
+			ti,offset_cncl_path = <0x20>;	/* ARX2 */
+		};
+	};
+};
+
+&i2c2 {
+	dac33: codec@19 {
+		compatible = "ti,tlv320dac33";
+		reg = <0x19>;
+		reset-gpios = <&gpio2 28 GPIO_ACTIVE_HIGH>;			/* gpio 60, powers it */
+		interrupts-extended = <&gpio2 21 IRQ_TYPE_EDGE_RISING>;	/* gpio 53 */
+		AVDD-supply = <&vaux4>;
+		DVDD-supply = <&vio>;
+		IOVDD-supply = <&vio>;
+		#sound-dai-cells = <0>;
+	};
+
+	/* AVdd straight from the battery */
+	tpa6140a2: amplifier@60 {
+		compatible = "ti,tpa6140a2";
+		reg = <0x60>;
+		sound-name-prefix = "TPA6140A2";
+	};
+};
