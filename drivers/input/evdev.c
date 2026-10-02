@@ -486,6 +486,13 @@ static int evdev_open(struct inode *inode, struct file *file)
 
 	file->private_data = client;
 	stream_open(inode, file);
+	/*
+	 * Seekable as on stock's 2.6.32: Harmattan's mce seeks its input devices to the end after
+	 * each event it handles (a GLib channel's G_SEEK_END) and logs an error for every one that
+	 * fails. stream_open() clears FMODE_LSEEK, so lseek() would fail before reaching .llseek;
+	 * reads still ignore the position (FMODE_STREAM)
+	 */
+	file->f_mode |= FMODE_LSEEK;
 
 	return 0;
 
@@ -1294,6 +1301,7 @@ static long evdev_ioctl_compat(struct file *file,
 
 static const struct file_operations evdev_fops = {
 	.owner		= THIS_MODULE,
+	.llseek		= noop_llseek,
 	.read		= evdev_read,
 	.write		= evdev_write,
 	.poll		= evdev_poll,
