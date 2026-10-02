@@ -492,6 +492,13 @@ static void omap_8250_set_termios_atomic(struct uart_port *port, struct ktermios
 		/* Enable AUTOCTS (autoRTS is enabled when RTS is raised) */
 		port->status |= UPSTAT_AUTOCTS | UPSTAT_AUTORTS;
 		priv->efr |= UART_EFR_CTS;
+		/*
+		 * and now if RTS is up already: set_mctrl() enables autoRTS only once this is set,
+		 * so a caller that raises RTS first (hci_nokia) never got it, and received bursts
+		 * overran the FIFO with RTS held high
+		 */
+		if (port->mctrl & TIOCM_RTS)
+			priv->efr |= UART_EFR_RTS;
 	} else	if (port->flags & UPF_SOFT_FLOW) {
 		/*
 		 * OMAP rx s/w flow control is borked; the transmitter remains
