@@ -1371,11 +1371,22 @@ static const struct lsm_id aegis_lsmid = {
 };
 
 /* LSM hooks */
+/*
+ * sgx: the data file check once the file is open (file_post_open, as IMA's),
+ * not at file_open: in 6.x the file can't be read there yet (FMODE_CAN_READ
+ * and overlayfs's real file come after security_file_open), so every check
+ * failed with -EINVAL. 2.6.32's dentry_open hook could still read ext4 files.
+ */
+static int validator_file_post_open(struct file *file, int mask)
+{
+	return validator_dentry_open(file);
+}
+
 static struct security_hook_list validator_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(netlink_send, validator_netlink_send),
 	LSM_HOOK_INIT(mmap_file, validator_file_mmap),
 	LSM_HOOK_INIT(file_free_security, validator_file_free_security),
-	LSM_HOOK_INIT(file_open, validator_dentry_open),
+	LSM_HOOK_INIT(file_post_open, validator_file_post_open),
 	LSM_HOOK_INIT(inode_permission, validator_inode_permission),
 	LSM_HOOK_INIT(inode_unlink, validator_inode_unlink),
 	LSM_HOOK_INIT(inode_create, validator_inode_create),
