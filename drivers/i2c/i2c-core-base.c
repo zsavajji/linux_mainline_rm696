@@ -1517,6 +1517,12 @@ int i2c_handle_smbus_host_notify(struct i2c_adapter *adap, unsigned short addr)
 }
 EXPORT_SYMBOL_GPL(i2c_handle_smbus_host_notify);
 
+/*
+ * /sys/class/i2c-adapter, the I2C_COMPAT links that 6.x removed: the N9's stock kernel had them, and
+ * Harmattan's mce reaches the touchscreen through them (i2c-2/2-004b/wait_for_gesture, calibrate)
+ */
+static struct class_compat *i2c_adapter_compat_class;
+
 static int i2c_register_adapter(struct i2c_adapter *adap)
 {
 	int res = -EINVAL;
@@ -1589,6 +1595,9 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
 		pr_err("adapter '%s': can't register device (%d)\n", adap->name, res);
 		goto err_replace_id;
 	}
+
+	if (class_compat_create_link(i2c_adapter_compat_class, &adap->dev))
+		dev_warn(&adap->dev, "Failed to create compatibility class link\n");
 
 	res = i2c_setup_smbus_alert(adap);
 	if (res)
@@ -1832,6 +1841,8 @@ void i2c_del_adapter(struct i2c_adapter *adap)
 	i2c_host_notify_irq_teardown(adap);
 
 	debugfs_remove_recursive(adap->debugfs);
+
+	class_compat_remove_link(i2c_adapter_compat_class, &adap->dev);
 
 	/* wait until all references to the device are gone
 	 *
@@ -2130,11 +2141,17 @@ static int __init i2c_init(void)
 
 	is_registered = true;
 
+	i2c_adapter_compat_class = class_compat_register("i2c-adapter");
+	if (!i2c_adapter_compat_class) {
+		retval = -ENOMEM;
+		goto class_err;
+	}
+
 	i2c_debugfs_root = debugfs_create_dir("i2c", NULL);
 
 	retval = i2c_add_driver(&dummy_driver);
 	if (retval)
-		goto class_err;
+		goto compat_err;
 
 	if (IS_ENABLED(CONFIG_OF_DYNAMIC))
 		WARN_ON(of_reconfig_notifier_register(&i2c_of_notifier));
@@ -2143,6 +2160,8 @@ static int __init i2c_init(void)
 
 	return 0;
 
+compat_err:
+	class_compat_unregister(i2c_adapter_compat_class);
 class_err:
 	is_registered = false;
 	bus_unregister(&i2c_bus_type);
@@ -2157,6 +2176,7 @@ static void __exit i2c_exit(void)
 		WARN_ON(of_reconfig_notifier_unregister(&i2c_of_notifier));
 	i2c_del_driver(&dummy_driver);
 	debugfs_remove_recursive(i2c_debugfs_root);
+	class_compat_unregister(i2c_adapter_compat_class);
 	bus_unregister(&i2c_bus_type);
 	tracepoint_synchronize_unregister();
 }
