@@ -82,3 +82,126 @@
 			 MATRIX_KEY(7, 8, KEY_VOLUMEDOWN)
 			 >;
 };
+
+/* The display: as the N950's (omap3-n950.dts), with the N9's lanes and panel (from Filip Matijević's
+ * N9 display patch for postmarketOS, 2017) */
+&omap3_pmx_core {
+	dsi_pins: dsi-pins {
+		pinctrl-single,pins = <
+			OMAP3_CORE1_IOPAD(0x20dc, PIN_OUTPUT | MUX_MODE1) /* dsi_dx0 */
+			OMAP3_CORE1_IOPAD(0x20de, PIN_OUTPUT | MUX_MODE1) /* dsi_dy0 */
+			OMAP3_CORE1_IOPAD(0x20e0, PIN_OUTPUT | MUX_MODE1) /* dsi_dx1 */
+			OMAP3_CORE1_IOPAD(0x20e2, PIN_OUTPUT | MUX_MODE1) /* dsi_dy1 */
+			OMAP3_CORE1_IOPAD(0x20e4, PIN_OUTPUT | MUX_MODE1) /* dsi_dx2 */
+			OMAP3_CORE1_IOPAD(0x20e6, PIN_OUTPUT | MUX_MODE1) /* dsi_dy2 */
+		>;
+	};
+
+	display_pins: display-pins {
+		pinctrl-single,pins = <
+			OMAP3_CORE1_IOPAD(0x20ca, PIN_INPUT | MUX_MODE4) /* gpio 62 - display te */
+			OMAP3_CORE1_IOPAD(0x20fe, PIN_OUTPUT | MUX_MODE4) /* gpio 87 - display reset */
+		>;
+	};
+};
+
+&dss {
+	status = "okay";
+
+	vdda_video-supply = <&vdac>;
+};
+
+&dsi {
+	status = "okay";
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&dsi_pins>;
+
+	vdd-supply = <&vpll2>;
+
+	port {
+		dsi_out_ep: endpoint {
+			remote-endpoint = <&lcd0_in>;
+			lanes = <2 3 4 5 0 1>;
+		};
+	};
+
+	lcd0: panel@0 {
+		compatible = "nokia,pyrenees", "panel-dsi-cm";
+		reg = <0>;
+		label = "lcd";	/* stock's name, which Harmattan's X driver looks for */
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&display_pins>;
+
+		vpnl-supply = <&vmmc2>;
+		vddi-supply = <&vio>;
+
+		reset-gpios = <&gpio3 23 GPIO_ACTIVE_HIGH>;	/* 87 */
+		te-gpios = <&gpio2 30 GPIO_ACTIVE_HIGH>;	/* 62 */
+
+		width-mm = <48>; /* 48.240 mm */
+		height-mm = <87>; /* 86.832 mm */
+
+		/* Landscape 854x480, as the stock kernel runs it (rotate 1) for Harmattan's X */
+		rotation = <90>;
+
+		/*
+		 * The panel's frame is 480x864; stock shows 854 of its rows, from row 0. The DSI
+		 * command-mode driver (omapfb's panel-dsi-cm, patched) takes the back porches as the
+		 * visible area's offset.
+		 */
+		panel-timing {
+			clock-frequency = <0>;		/* from the frame rate (panel-dsi-cm), DSI adds 1.5x */
+
+			hback-porch = <0>;
+			hactive = <480>;
+			hfront-porch = <0>;
+			hsync-len = <2>;
+
+			vback-porch = <0>;
+			vactive = <854>;
+			vfront-porch = <10>;
+			vsync-len = <1>;
+
+			hsync-active = <0>;
+			vsync-active = <0>;
+			de-active = <1>;
+			pixelclk-active = <1>;
+		};
+
+		port {
+			lcd0_in: endpoint {
+				remote-endpoint = <&dsi_out_ep>;
+			};
+		};
+	};
+};
+
+/* TV-out (composite, through the AV jack), as the N900's (omap3-n900.dts): stock has it as display
+ * "tv", which Harmattan's X driver requires */
+/ {
+	tv: connector {
+		compatible = "composite-video-connector";
+		label = "tv";
+
+		port {
+			tv_connector_in: endpoint {
+				remote-endpoint = <&venc_out>;
+			};
+		};
+	};
+};
+
+&venc {
+	status = "okay";
+
+	vdda-supply = <&vdac>;
+
+	port {
+		venc_out: endpoint {
+			remote-endpoint = <&tv_connector_in>;
+			ti,channels = <1>;
+		};
+	};
+};
