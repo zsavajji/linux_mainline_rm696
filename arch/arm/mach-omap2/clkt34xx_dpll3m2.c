@@ -135,15 +135,18 @@ out:
  * The policy, as Nokia's N9 kernel: L3 at OPP50 (M2 = 2: L3 and the SDRC at 97.6 MHz, VDD2 1.0 V) only
  * while nothing needs it high. The CPU above its minimum (scaling_min_freq: stock's rule was its lowest
  * OPP, 300 MHz; the user's phone sets a 600 MHz floor) holds it high (cpufreq), and so do
- * omap3_l3_hold() callers: the SGX from before it gets its clock until after it lost it, so its clock
- * (CORE/2) never changes while it runs. Raised at once, lowered 1 s after the last hold went.
+ * omap3_l3_hold() callers (enum omap3_l3_user): the SGX from before it gets its clock until after it
+ * lost it, so its clock (CORE/2) never changes while it runs; the display, USB and WLAN as stock asked
+ * for bus throughput. Raised at once, lowered 1 s after the last hold went.
  */
 #define L3_LOWER_DELAY_MS	1000
 
 static struct clk *l3_m2;
 static unsigned long l3_high, l3_low;	/* dpll3_m2_ck rates */
 static DEFINE_MUTEX(l3_lock);
-static int l3_holds;
+static int l3_holds[OMAP3_L3_USERS];
+static const char * const l3_names[OMAP3_L3_USERS] = { "cpu", "sgx", "dss", "usb", "wlan" };
+static unsigned long l3_ignored;	/* debugfs omap3_l3 "-user": holds not counted, for tests */
 static int l3_forced;			/* debugfs omap3_l3: 0 auto, 1 low, 2 high */
 static bool l3_cpu_high;
 static unsigned long l3_since;		/* jiffies at the last accounting */
@@ -159,16 +162,24 @@ static void l3_account(void)
 
 static unsigned long l3_target(void)
 {
+	int i;
+
 	if (l3_forced)
 		return l3_forced == 1 ? l3_low : l3_high;
-	return l3_holds ? l3_high : l3_low;
+	for (i = 0; i < OMAP3_L3_USERS; i++)
+		if (l3_holds[i] && !test_bit(i, &l3_ignored))
+			return l3_high;
+	return l3_low;
 }
 
 static void l3_apply(void)
 {
-	unsigned long rate = l3_target();
+	unsigned long rate;
 
 	lockdep_assert_held(&l3_lock);
+	if (!l3_m2)
+		return;
+	rate = l3_target();
 	if (clk_get_rate(l3_m2) == rate)
 		return;
 	l3_account();
@@ -185,24 +196,21 @@ static void l3_lower_work(struct work_struct *work)
 }
 static DECLARE_DELAYED_WORK(l3_lower, l3_lower_work);
 
-/* L3 at OPP100 from now until omap3_l3_release(); may sleep */
-void omap3_l3_hold(void)
+/* L3 at OPP100 from now until omap3_l3_release(); may sleep. Holds count from boot (the display's and
+ * USB's start before the policy) */
+void omap3_l3_hold(enum omap3_l3_user who)
 {
-	if (!l3_m2)
-		return;
 	mutex_lock(&l3_lock);
-	l3_holds++;
+	l3_holds[who]++;
 	l3_apply();
 	mutex_unlock(&l3_lock);
 }
 EXPORT_SYMBOL_GPL(omap3_l3_hold);
 
-void omap3_l3_release(void)
+void omap3_l3_release(enum omap3_l3_user who)
 {
-	if (!l3_m2)
-		return;
 	mutex_lock(&l3_lock);
-	if (!WARN_ON(l3_holds <= 0) && !--l3_holds)
+	if (!WARN_ON(l3_holds[who] <= 0) && !--l3_holds[who])
 		mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(L3_LOWER_DELAY_MS));
 	mutex_unlock(&l3_lock);
 }
@@ -217,9 +225,9 @@ static void l3_cpu_work(struct work_struct *work)
 		return;
 	held = high;
 	if (high)
-		omap3_l3_hold();
+		omap3_l3_hold(OMAP3_L3_CPU);
 	else
-		omap3_l3_release();
+		omap3_l3_release(OMAP3_L3_CPU);
 }
 static DECLARE_WORK(l3_cpu, l3_cpu_work);
 
@@ -238,12 +246,17 @@ static struct notifier_block l3_cpufreq_nb = { .notifier_call = l3_cpufreq_cb };
 
 static int l3_show(struct seq_file *m, void *v)
 {
+	int i;
+
 	mutex_lock(&l3_lock);
 	l3_account();
-	seq_printf(m, "%s, holds %d (CPU %s), %s; OPP50 %llu s, OPP100 %llu s\n",
-		   clk_get_rate(l3_m2) == l3_low ? "OPP50" : "OPP100", l3_holds,
-		   l3_cpu_high ? "high" : "low", (const char *[]){ "auto", "low", "high" }[l3_forced],
+	seq_printf(m, "%s, %s; OPP50 %llu s, OPP100 %llu s; holds",
+		   clk_get_rate(l3_m2) == l3_low ? "OPP50" : "OPP100",
+		   (const char *[]){ "auto", "low", "high" }[l3_forced],
 		   div_u64(l3_ms[1], 1000), div_u64(l3_ms[0], 1000));
+	for (i = 0; i < OMAP3_L3_USERS; i++)
+		seq_printf(m, " %s%s %d", test_bit(i, &l3_ignored) ? "-" : "", l3_names[i], l3_holds[i]);
+	seq_putc(m, '\n');
 	mutex_unlock(&l3_lock);
 	return 0;
 }
@@ -253,19 +266,31 @@ static int l3_open(struct inode *inode, struct file *file)
 	return single_open(file, l3_show, NULL);
 }
 
-/* for tests: "low" or "high" pins the level (even with the SGX on), "auto" gives it back */
+/*
+ * For tests: "low" or "high" pins the level (even with the SGX on), "auto" gives it back; "-usb" stops
+ * counting a user's holds (the CPU, USB or WLAN; not the SGX's or the display's, whose clocks must not
+ * change while they run), "+usb" counts them again
+ */
 static ssize_t l3_write(struct file *file, const char __user *buf, size_t len, loff_t *ppos)
 {
 	char s[8] = {};
-	int f;
+	int f, i;
 
 	if (copy_from_user(s, buf, min(len, sizeof(s) - 1)))
 		return -EFAULT;
 	f = sysfs_streq(s, "auto") ? 0 : sysfs_streq(s, "low") ? 1 : sysfs_streq(s, "high") ? 2 : -1;
-	if (f < 0)
+	i = (s[0] == '-' || s[0] == '+') ? sysfs_match_string(l3_names, s + 1) : -EINVAL;
+	if (f < 0 && i < 0)
 		return -EINVAL;
+	if (f < 0 && (i == OMAP3_L3_SGX || i == OMAP3_L3_DSS))
+		return -EPERM;
 	mutex_lock(&l3_lock);
-	l3_forced = f;
+	if (f >= 0)
+		l3_forced = f;
+	else if (s[0] == '-')
+		set_bit(i, &l3_ignored);
+	else
+		clear_bit(i, &l3_ignored);
 	l3_apply();
 	mutex_unlock(&l3_lock);
 	return len;
