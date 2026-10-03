@@ -553,6 +553,7 @@ static int bridge_brd_start(struct bridge_dev_context *dev_ctxt,
 		(*pdata->dsp_cm_write)(1 << OMAP3430_AUTO_IVA2_DPLL_SHIFT,
 				OMAP3430_IVA2_MOD, OMAP3430_CM_AUTOIDLE_PLL);
 
+		dsp_opp_init(dev_context);
 		if ((unsigned int *)ul_dsp_clk_addr != NULL) {
 			/* Get the clock rate */
 			ul_dsp_clk_rate = dsp_clk_get_iva2_rate();

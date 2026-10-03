@@ -45,6 +45,10 @@
 #include "_tiomap.h"
 #include "_tiomap_pwr.h"
 
+#include <linux/cpufreq.h>
+#include <linux/pm_qos.h>
+#include <linux/workqueue.h>
+
 #define PWRSTST_TIMEOUT          200
 
 /*
@@ -67,8 +71,109 @@ int handle_constraints_set(struct bridge_dev_context *dev_context,
 	/* Set the new opp value */
 	if (pdata->dsp_set_min_opp)
 		(*pdata->dsp_set_min_opp) ((u32) *(constraint_val + 1));
+#else
+	dsp_opp_request(dev_context, ((u32 *)pargs)[1]);
 #endif /* #ifdef CONFIG_TIDSPBRIDGE_DVFS */
 	return 0;
+}
+
+const u32 dsp_opps[4][3] = {
+	{ 260000, 1012500, 300000 }, { 520000, 1200000, 600000 },
+	{ 660000, 1325000, 800000 }, { 800000, 1375000, 1000000 },
+};
+
+/*
+ * DSP OPPs as Nokia's kernel ran them (CONFIG_BRIDGE_DVFS): the IVA2 runs at the rate of the
+ * VDD1 OPP, the MPU's cpufreq OPP of the same level, so it follows every CPU frequency change:
+ * slowed down before the voltage drops, sped up once it rose; the DSP is told its new OPP after
+ * each change (dspbridge_scale_notification -> pwr_pm_post_scale). The DSP's own requests
+ * (MBX_PM_OPP_REQ, its load monitor) only set a floor on VDD1, here a CPU frequency floor.
+ */
+static void dsp_opp_apply(struct work_struct *work);
+
+static struct {
+	struct work_struct work;
+	struct bridge_dev_context *dc;
+	struct freq_qos_request qos;
+	struct notifier_block nb;
+	struct clk *dpll2;
+	u32 want;
+} dsp_opp = {
+	.work = __WORK_INITIALIZER(dsp_opp.work, dsp_opp_apply),
+};
+
+/* stock's mapping of the CPU frequency to the VDD1 OPP */
+static u32 dsp_opp_level(unsigned int khz)
+{
+	return khz >= 1000000 ? 4 : khz >= 800000 ? 3 : khz >= 600000 ? 2 : 1;
+}
+
+static int dsp_opp_cpufreq(struct notifier_block *nb, unsigned long val, void *data)
+{
+	struct cpufreq_freqs *f = data;
+	struct bridge_dev_context *dc = dsp_opp.dc;
+	struct io_mgr *hio_mgr = NULL;
+	u32 old = dsp_opp_level(f->old), opp = dsp_opp_level(f->new);
+
+	if (old == opp)
+		return NOTIFY_OK;
+	if ((val == CPUFREQ_PRECHANGE && opp < old) || (val == CPUFREQ_POSTCHANGE && opp > old))
+		if (clk_set_rate(dsp_opp.dpll2, dsp_opps[opp - 1][0] * 1000))
+			dev_err(bridge, "%s: no IVA2 OPP %u\n", __func__, opp);
+	if (val == CPUFREQ_POSTCHANGE) {
+		dev_get_io_mgr(dc->dev_obj, &hio_mgr);
+		if (hio_mgr)
+			io_sh_msetting(hio_mgr, SHM_CURROPP, &opp);
+		if (dc->brd_state == BRD_RUNNING)
+			sm_interrupt_dsp(dc, MBX_PM_SETPOINT_POSTNOTIFY);
+	}
+	return NOTIFY_OK;
+}
+
+/* Before the DSP starts: the IVA2 at the current VDD1 OPP's rate, then follow the CPU */
+void dsp_opp_init(struct bridge_dev_context *dev_context)
+{
+	struct cpufreq_policy *policy;
+
+	dsp_opp.dc = dev_context;
+	if (dsp_opp.nb.notifier_call)
+		return;
+	dsp_opp.dpll2 = clk_get(bridge, "dpll2_ck");
+	policy = cpufreq_cpu_get(0);
+	if (IS_ERR(dsp_opp.dpll2) || !policy) {
+		dev_err(bridge, "%s: no IVA2 clock or cpufreq, the DSP stays at %u kHz\n",
+			__func__, dsp_clk_get_iva2_rate());
+		if (policy)
+			cpufreq_cpu_put(policy);
+		return;
+	}
+	freq_qos_add_request(&policy->constraints, &dsp_opp.qos, FREQ_QOS_MIN, 0);
+	cpufreq_cpu_put(policy);
+	dsp_opp.nb.notifier_call = dsp_opp_cpufreq;
+	cpufreq_register_notifier(&dsp_opp.nb, CPUFREQ_TRANSITION_NOTIFIER);
+	/* ponytail: a CPU slowdown between these two lines leaves the IVA2 one OPP fast until the next change */
+	clk_set_rate(dsp_opp.dpll2, dsp_opps[dsp_opp_level(cpufreq_quick_get(0)) - 1][0] * 1000);
+}
+
+static void dsp_opp_apply(struct work_struct *work)
+{
+	u32 opp = READ_ONCE(dsp_opp.want);
+
+	if (freq_qos_request_active(&dsp_opp.qos))
+		freq_qos_update_request(&dsp_opp.qos, opp > 1 ? dsp_opps[opp - 1][2] : 0);
+}
+
+void dsp_opp_request(struct bridge_dev_context *dev_context, u32 opp)
+{
+	WRITE_ONCE(dsp_opp.want, clamp_t(u32, opp, 1, ARRAY_SIZE(dsp_opps)));
+	schedule_work(&dsp_opp.work);
+}
+
+void dsp_opp_off(struct bridge_dev_context *dev_context)
+{
+	cancel_work_sync(&dsp_opp.work);
+	WRITE_ONCE(dsp_opp.want, 1);
+	dsp_opp_apply(NULL);
 }
 
 /*
@@ -108,6 +213,9 @@ int handle_hibernation_from_dsp(struct bridge_dev_context *dev_context)
 
 		/* Turn off DSP Peripheral clocks and DSP Load monitor timer */
 		status = dsp_clock_disable_all(dev_context->dsp_per_clks);
+
+		/* the lowest OPP while off, as Nokia's driver (its VDD1 OPP request) */
+		dsp_opp_off(dev_context);
 
 		/* and the IVA2's own, as Nokia's driver: sm_interrupt_dsp() wakes it with it */
 		dsp_clk_disable(DSP_CLK_IVA2);

@@ -21,6 +21,19 @@
 
 #ifdef CONFIG_PM
 extern s32 dsp_test_sleepstate;
+
+/*
+ * The 3630's IVA OPPs as Nokia's dspbridge.c gave them to the DSP (kHz, uV) and the MPU's
+ * cpufreq OPP of the same VDD1 level (kHz); the DSP numbers them from 1
+ */
+extern const u32 dsp_opps[4][3];
+
+/* The IVA2 at the VDD1 OPP's rate from now on, following the CPU (before the DSP starts) */
+void dsp_opp_init(struct bridge_dev_context *dev_context);
+/* The DSP's request for an OPP (MBX_PM_OPP_REQ): a floor on VDD1, asynchronously */
+void dsp_opp_request(struct bridge_dev_context *dev_context, u32 opp);
+/* The DSP hibernates: no floor */
+void dsp_opp_off(struct bridge_dev_context *dev_context);
 #endif
 
 extern struct mailbox_context mboxsetting;

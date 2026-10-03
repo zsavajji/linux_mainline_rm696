@@ -1622,28 +1622,28 @@ int io_sh_msetting(struct io_mgr *hio_mgr, u8 desc, void *pargs)
 	 * Without DVFS the DSP still reads the OPP table (its power manager reports load and asks
 	 * for OPPs with it), which Nokia's driver filled before the start handshake: the 3630's IVA
 	 * OPPs in kHz and uV from 1, thresholds 88% and 95% as its dspbridge.c, the current one from
-	 * the IVA2 clock. OPP requests are still ignored
+	 * the IVA2 clock; dsp_opp_request() serves its requests
 	 */
-	static const u32 opps[][2] = {
-		{ 260000, 1012500 }, { 520000, 1200000 }, { 660000, 1325000 }, { 800000, 1375000 },
-	};
 	struct opp_struct *t = &hio_mgr->shared_mem->opp_table_struct;
 	u32 i, khz;
 
 	switch (desc) {
 	case SHM_OPPINFO:
-		for (i = 0; i < ARRAY_SIZE(opps); i++) {
-			t->opp_point[i + 1].frequency = opps[i][0];
-			t->opp_point[i + 1].voltage = opps[i][1];
-			t->opp_point[i + 1].min_freq = i ? opps[i - 1][0] * 88 / 100 : 0;
-			t->opp_point[i + 1].max_freq = i + 1 < ARRAY_SIZE(opps) ?
-						       opps[i][0] * 95 / 100 : opps[i][0];
+		for (i = 0; i < ARRAY_SIZE(dsp_opps); i++) {
+			t->opp_point[i + 1].frequency = dsp_opps[i][0];
+			t->opp_point[i + 1].voltage = dsp_opps[i][1];
+			t->opp_point[i + 1].min_freq = i ? dsp_opps[i - 1][0] * 88 / 100 : 0;
+			t->opp_point[i + 1].max_freq = i + 1 < ARRAY_SIZE(dsp_opps) ?
+						       dsp_opps[i][0] * 95 / 100 : dsp_opps[i][0];
 		}
-		t->num_opp_pts = ARRAY_SIZE(opps);
+		t->num_opp_pts = ARRAY_SIZE(dsp_opps);
 		khz = dsp_clk_get_iva2_rate();
-		for (i = 1; i < ARRAY_SIZE(opps) && opps[i - 1][0] < khz; i++)
+		for (i = 1; i < ARRAY_SIZE(dsp_opps) && dsp_opps[i - 1][0] < khz; i++)
 			;
 		t->curr_opp_pt = i;
+		break;
+	case SHM_CURROPP:
+		t->curr_opp_pt = *(u32 *)pargs;
 		break;
 	case SHM_GETOPP:
 		if (pargs)
