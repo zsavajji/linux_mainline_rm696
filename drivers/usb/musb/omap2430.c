@@ -19,6 +19,7 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/pm_runtime.h>
+#include <linux/clk/ti.h>
 #include <linux/err.h>
 #include <linux/delay.h>
 #include <linux/usb/musb.h>
@@ -486,8 +487,10 @@ static int omap2430_runtime_suspend(struct device *dev)
 	struct omap2430_glue		*glue = dev_get_drvdata(dev);
 	struct musb			*musb = glue_to_musb(glue);
 
-	if (!musb)
+	if (!musb) {
+		omap3_l3_release(OMAP3_L3_USB);
 		return 0;
+	}
 
 	musb->context.otg_interfsel = musb_readl(musb->mregs,
 						 OTG_INTERFSEL);
@@ -500,15 +503,21 @@ static int omap2430_runtime_suspend(struct device *dev)
 	}
 
 	glue->is_runtime_suspended = 1;
+	omap3_l3_release(OMAP3_L3_USB);
 
 	return 0;
 }
 
+/*
+ * OMAP3 L3 at OPP100 while the controller is on (a cable is plugged in), as Nokia's N9 kernel
+ * (rm696_usb_set_pm_limits: 780800 KiB/s from VBUS connect to disconnect)
+ */
 static int omap2430_runtime_resume(struct device *dev)
 {
 	struct omap2430_glue		*glue = dev_get_drvdata(dev);
 	struct musb			*musb = glue_to_musb(glue);
 
+	omap3_l3_hold(OMAP3_L3_USB);
 	if (!musb)
 		return 0;
 
