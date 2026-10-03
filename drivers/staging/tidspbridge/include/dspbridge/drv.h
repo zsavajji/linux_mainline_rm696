@@ -144,6 +144,9 @@ struct process_context {
 
 	/* Stream resources */
 	struct idr *stream_id;
+
+	/* Policy handle (rmgr/policy.c) */
+	void *policy;
 };
 
 /*

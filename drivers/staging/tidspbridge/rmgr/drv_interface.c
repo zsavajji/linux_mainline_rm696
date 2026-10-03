@@ -45,6 +45,8 @@
 #include <dspbridge/proc.h>
 #include <dspbridge/dev.h>
 
+#include <policy.h>
+
 #ifdef CONFIG_TIDSPBRIDGE_DVFS
 #include <mach-omap2/omap3-opp.h>
 #endif
@@ -169,11 +171,19 @@ static int bridge_open(struct inode *ip, struct file *filp)
 
 	filp->private_data = pr_ctxt;
 
+	status = policy_open_hook(ip, filp);
+	if (status) {
+		filp->private_data = NULL;
+		goto err3;
+	}
+
 #ifdef CONFIG_TIDSPBRIDGE_RECOVERY
 	atomic_inc(&bridge_cref);
 #endif
 	return 0;
 
+err3:
+	kfree(pr_ctxt->stream_id);
 err2:
 	kfree(pr_ctxt->node_id);
 err1:
@@ -189,6 +199,10 @@ static int bridge_release(struct inode *ip, struct file *filp)
 {
 	int status = 0;
 	struct process_context *pr_ctxt;
+
+	status = policy_release_hook(ip, filp);
+	if (status)
+		return status;
 
 	if (!filp->private_data) {
 		status = -EIO;
@@ -220,6 +234,10 @@ static long bridge_ioctl(struct file *filp, unsigned int code,
 	int status;
 	u32 retval = 0;
 	union trapped_args buf_in;
+
+	status = policy_ioctl_pre_hook(filp, code, args);
+	if (status)
+		return status;
 
 #ifdef CONFIG_TIDSPBRIDGE_RECOVERY
 	if (recover) {
@@ -255,6 +273,8 @@ static long bridge_ioctl(struct file *filp, unsigned int code,
 
 	}
 
+	status = policy_ioctl_post_hook(filp, code, args, status);
+
 err:
 	return status;
 }
@@ -264,6 +284,10 @@ static int bridge_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	unsigned long base_pgoff;
 	int status;
+
+	status = policy_mmap_hook(filp);
+	if (status)
+		return status;
 
 	/* VM_IO | VM_DONTEXPAND | VM_DONTDUMP are set by remap_pfn_range() */
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
@@ -559,6 +583,10 @@ static int omap34_xx_bridge_probe(struct platform_device *pdev)
 	driver_major = MAJOR(dev);
 	device_create(bridge_class, NULL, MKDEV(driver_major, 0),
 		      NULL, "DspBridge");
+
+	/* Nokia's /sys/class/ti_bridge/{policy,enabled,guest_mode,preempt} */
+	policy_init(bridge_class);
+
 	pr_info("DSP Bridge driver loaded\n");
 
 	return 0;
@@ -575,6 +603,8 @@ static void omap34_xx_bridge_remove(struct platform_device *pdev)
 {
 	dev_t devno;
 	struct drv_data *drv_datap = dev_get_drvdata(bridge);
+
+	policy_remove();
 
 	/* Retrieve the Object handle from the driver data */
 	if (!drv_datap || !drv_datap->drv_object) {
