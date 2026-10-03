@@ -1184,7 +1184,7 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 	struct mm_struct *mm = current->mm;
 	unsigned int gup_flags = FOLL_FORCE;
 	u32 num_usr_pgs = 0;
-	struct page *mapped_page, *pg;
+	struct page *pg, **pages;
 	s32 pg_num;
 	u32 va = virt_addr;
 	u32 pg_i = 0;
@@ -1330,55 +1330,51 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 		 * also for the VM_IO and vmalloc mappings (get_page()), so this
 		 * stays get_user_pages() and not pin_user_pages().
 		 */
-		for (pg_i = 0; pg_i < num_usr_pgs; pg_i++) {
-			pg_num = get_user_pages(ul_mpu_addr, 1, gup_flags,
-						&mapped_page);
-			if (pg_num > 0) {
-				dma_addr_t h;
+		/* all of the buffer's pages at once: a call per page cost 25 us each */
+		pages = mapped_pages ? mapped_pages :
+			kvmalloc_array(num_usr_pgs, sizeof(*pages), GFP_KERNEL);
+		pg_num = pages ? get_user_pages(ul_mpu_addr, num_usr_pgs, gup_flags, pages) :
+				 -ENOMEM;
+		if (pg_num != (s32)num_usr_pgs) {
+			pr_err("DSPBRIDGE: get_user_pages FAILED, MPU addr = 0x%x, "
+			       "vma->vm_flags = 0x%lx, get_user_pages Err Value = %d, "
+			       "Buffer size=0x%x\n", ul_mpu_addr, vma->vm_flags, pg_num,
+			       ul_num_bytes);
+			for (pg_i = 0; (s32)pg_i < pg_num; pg_i++)
+				put_page(pages[pg_i]);
+			pg_i = 0;
+			status = -EPERM;
+		}
+		for (pg_i = 0; !status && pg_i < num_usr_pgs; pg_i++) {
+			struct page *mapped_page = pages[pg_i];
+			dma_addr_t h;
 
-				/*
-				 * Write the page back and drop it from the D-cache before the DSP
-				 * gets it: gst-dsp never flushes its data buffers (stream headers,
-				 * bitstream, frames) and relied on Nokia's kernel, whose
-				 * get_user_pages() did that through flush_dcache_page(). ARM's
-				 * flush_dcache_page() no longer touches the D-cache on VIPT
-				 * non-aliasing caches, and the DSP read stale memory.
-				 */
-				h = dma_map_page(bridge, mapped_page, 0, PAGE_SIZE,
-						 DMA_BIDIRECTIONAL);
-				if (!dma_mapping_error(bridge, h))
-					dma_unmap_page(bridge, h, PAGE_SIZE,
-						       DMA_BIDIRECTIONAL);
-				if (page_count(mapped_page) < 1) {
-					pr_err("Bad page count after doing"
-					       "get_user_pages on"
-					       "user buffer\n");
-					bad_page_dump(page_to_phys(mapped_page),
-						      mapped_page);
-				}
-				status = pte_set(dev_context->pt_attrs,
-						 page_to_phys(mapped_page), va,
-						 HW_PAGE_SIZE4KB, &hw_attrs);
-				if (status)
-					break;
-
-				if (mapped_pages)
-					mapped_pages[pg_i] = mapped_page;
-
-				va += HW_PAGE_SIZE4KB;
-				ul_mpu_addr += HW_PAGE_SIZE4KB;
-			} else {
-				pr_err("DSPBRIDGE: get_user_pages FAILED,"
-				       "MPU addr = 0x%x,"
-				       "vma->vm_flags = 0x%lx,"
-				       "get_user_pages Err"
-				       "Value = %d, Buffer"
-				       "size=0x%x\n", ul_mpu_addr,
-				       vma->vm_flags, pg_num, ul_num_bytes);
-				status = -EPERM;
+			/*
+			 * Write the page back and drop it from the D-cache before the DSP
+			 * gets it: gst-dsp never flushes its data buffers (stream headers,
+			 * bitstream, frames) and relied on Nokia's kernel, whose
+			 * get_user_pages() did that through flush_dcache_page(). ARM's
+			 * flush_dcache_page() no longer touches the D-cache on VIPT
+			 * non-aliasing caches, and the DSP read stale memory.
+			 */
+			h = dma_map_page(bridge, mapped_page, 0, PAGE_SIZE,
+					 DMA_BIDIRECTIONAL);
+			if (!dma_mapping_error(bridge, h))
+				dma_unmap_page(bridge, h, PAGE_SIZE,
+					       DMA_BIDIRECTIONAL);
+			status = pte_set(dev_context->pt_attrs,
+					 page_to_phys(mapped_page), va,
+					 HW_PAGE_SIZE4KB, &hw_attrs);
+			if (status) {
+				/* the rollback below unmaps the first pg_i pages */
+				for (pg_num = pg_i; pg_num < (s32)num_usr_pgs; pg_num++)
+					put_page(pages[pg_num]);
 				break;
 			}
+			va += HW_PAGE_SIZE4KB;
 		}
+		if (pages != mapped_pages)
+			kvfree(pages);
 	}
 	mmap_read_unlock(mm);
 func_cont:
