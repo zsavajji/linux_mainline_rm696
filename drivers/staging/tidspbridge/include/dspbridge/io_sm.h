@@ -78,15 +78,13 @@ extern void io_dpc(unsigned long ref_data);
  *  Purpose:
  *	Main message handler for the shared memory Bridge channel manager.
  *	Determine if this message is ours, then schedules a DPC to
- *	dispatch I/O.
+ *	dispatch I/O.  Mailbox rx_callback, runs in the mailbox's threaded
+ *	interrupt handler.
  *  Parameters:
- *	self:	Pointer to its own notifier_block struct.
- *	len:	Length of message.
+ *	cl:	The bridge's mailbox client.
  *	msg:	Message code received.
- *  Returns:
- *	NOTIFY_OK if handled; NOTIFY_BAD otherwise.
  */
-int io_mbox_msg(struct notifier_block *self, unsigned long len, void *msg);
+void io_mbox_msg(struct mbox_client *cl, void *msg);
 
 /*
  *  ======== io_request_chnl ========

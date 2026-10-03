@@ -148,14 +148,17 @@ int bridge_chnl_add_io_req(struct chnl_object *chnl_obj, void *host_buf,
 		}
 	}
 func_cont:
-	/* Mailbox IRQ is disabled to avoid race condition with DMA/ZCPY
-	 * channels. DPCCS is held to avoid race conditions with PCPY channels.
-	 * If DPC is scheduled in process context (iosm_schedule) and any
-	 * non-mailbox interrupt occurs, that DPC will run and break CS. Hence
-	 * we disable ALL DPCs. We will try to disable ONLY IO DPC later. */
+	/*
+	 * DPCCS is held to avoid race conditions with PCPY channels. If DPC
+	 * is scheduled in process context (iosm_schedule) and any
+	 * non-mailbox interrupt occurs, that DPC will run and break CS.
+	 * Hence we disable ALL DPCs. The mailbox message handler runs in a
+	 * threaded interrupt handler, which cannot run while this
+	 * non-preemptible section holds the (uniprocessor) CPU, so its
+	 * interrupt no longer needs to be masked here.
+	 */
 	chnl_mgr_obj = pchnl->chnl_mgr_obj;
 	spin_lock_bh(&chnl_mgr_obj->chnl_mgr_lock);
-	omap_mbox_disable_irq(dev_ctxt->mbox, IRQ_RX);
 	if (pchnl->chnl_type == CHNL_PCPY) {
 		/* This is a processor-copy channel. */
 		if (CHNL_IS_OUTPUT(pchnl->chnl_mode)) {
@@ -210,7 +213,6 @@ func_cont:
 			 IO_OUTPUT), &mb_val);
 	sched_dpc = true;
 out:
-	omap_mbox_enable_irq(dev_ctxt->mbox, IRQ_RX);
 	spin_unlock_bh(&chnl_mgr_obj->chnl_mgr_lock);
 	if (mb_val != 0)
 		sm_interrupt_dsp(dev_ctxt, mb_val);
@@ -570,7 +572,6 @@ int bridge_chnl_get_ioc(struct chnl_object *chnl_obj, u32 timeout,
 	}
 	/* See comment in AddIOReq */
 	spin_lock_bh(&pchnl->chnl_mgr_obj->chnl_mgr_lock);
-	omap_mbox_disable_irq(dev_ctxt->mbox, IRQ_RX);
 	if (dequeue_ioc) {
 		/* Dequeue IOC and set chan_ioc; */
 		chnl_packet_obj = list_first_entry(&pchnl->io_completions,
@@ -616,7 +617,6 @@ int bridge_chnl_get_ioc(struct chnl_object *chnl_obj, u32 timeout,
 		/* else, if list is empty, ensure event is reset. */
 		sync_reset_event(pchnl->sync_event);
 	}
-	omap_mbox_enable_irq(dev_ctxt->mbox, IRQ_RX);
 	spin_unlock_bh(&pchnl->chnl_mgr_obj->chnl_mgr_lock);
 	if (dequeue_ioc
 	    && (pchnl->chnl_type == CHNL_PCPY && pchnl->chnl_id > 1)) {

@@ -212,10 +212,6 @@ static struct bridge_drv_interface drv_interface_fxns = {
 	bridge_msg_set_queue_id,
 };
 
-static struct notifier_block dsp_mbox_notifier = {
-	.notifier_call = io_mbox_msg,
-};
-
 static inline void flush_all(struct bridge_dev_context *dev_context)
 {
 	if (dev_context->brd_state == BRD_DSP_HIBERNATION ||
@@ -539,14 +535,20 @@ static int bridge_brd_start(struct bridge_dev_context *dev_ctxt,
 					       ul_dsp_clk_addr, sizeof(u32), 0);
 		}
 		/*
-		 * Enable Mailbox events and also drain any pending
-		 * stale messages.
+		 * Enable Mailbox events: the channel is the device's
+		 * "dsp" mailbox (DT: mboxes, mbox-names). Messages are sent
+		 * without blocking, sm_interrupt_dsp() can run in atomic
+		 * context.
 		 */
-		dev_context->mbox = omap_mbox_get("dsp", &dsp_mbox_notifier);
+		dev_context->mbox_client.dev = bridge;
+		dev_context->mbox_client.rx_callback = io_mbox_msg;
+		dev_context->mbox_client.tx_block = false;
+		dev_context->mbox = mbox_request_channel_byname(
+					&dev_context->mbox_client, "dsp");
 		if (IS_ERR(dev_context->mbox)) {
+			pr_err("%s: Failed to get dsp mailbox: %ld\n",
+			       __func__, PTR_ERR(dev_context->mbox));
 			dev_context->mbox = NULL;
-			pr_err("%s: Failed to get dsp mailbox handle\n",
-								__func__);
 			status = -EPERM;
 		}
 
@@ -677,8 +679,7 @@ static int bridge_brd_stop(struct bridge_dev_context *dev_ctxt)
 	}
 	/* Disable the mailbox interrupts */
 	if (dev_context->mbox) {
-		omap_mbox_disable_irq(dev_context->mbox, IRQ_RX);
-		omap_mbox_put(dev_context->mbox, &dsp_mbox_notifier);
+		mbox_free_channel(dev_context->mbox);
 		dev_context->mbox = NULL;
 	}
 	/* Reset IVA2 clocks*/
