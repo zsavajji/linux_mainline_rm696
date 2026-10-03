@@ -109,7 +109,7 @@ int omap3_core_dpll_m2_set_rate(unsigned long rate, unsigned long clkrate, u32 n
 		}
 	}
 
-	pr_info("dpll3_m2: CORE %lu -> %lu Hz, SDRC %lu Hz, RFR %08x%s\n", clkrate, rate, sdrcrate,
+	pr_debug("dpll3_m2: CORE %lu -> %lu Hz, SDRC %lu Hz, RFR %08x%s\n", clkrate, rate, sdrcrate,
 		sdrc_cs0->rfr_ctrl, unlock_dll ? ", DLL unlocked" : "");
 
 	local_irq_save(flags);
@@ -154,6 +154,7 @@ static int l3_forced;			/* debugfs omap3_l3: 0 auto, 1 low, 2 high */
 static bool l3_cpu_high;
 static unsigned long l3_since;		/* jiffies at the last accounting */
 static u64 l3_ms[2];			/* time at OPP100, OPP50 */
+static unsigned long l3_switches;
 
 static void l3_account(void)
 {
@@ -188,6 +189,8 @@ static void l3_apply(void)
 	l3_account();
 	if (clk_set_rate(l3_m2, rate))
 		pr_err("omap3-l3: dpll3_m2_ck to %lu Hz failed\n", rate);
+	else
+		l3_switches++;
 }
 
 static void l3_lower_work(struct work_struct *work)
@@ -253,10 +256,10 @@ static int l3_show(struct seq_file *m, void *v)
 
 	mutex_lock(&l3_lock);
 	l3_account();
-	seq_printf(m, "%s, %s; OPP50 %llu s, OPP100 %llu s; holds",
+	seq_printf(m, "%s, %s; OPP50 %llu s, OPP100 %llu s, %lu switches; holds",
 		   clk_get_rate(l3_m2) == l3_low ? "OPP50" : "OPP100",
 		   (const char *[]){ "auto", "low", "high" }[l3_forced],
-		   div_u64(l3_ms[1], 1000), div_u64(l3_ms[0], 1000));
+		   div_u64(l3_ms[1], 1000), div_u64(l3_ms[0], 1000), l3_switches);
 	for (i = 0; i < OMAP3_L3_USERS; i++)
 		seq_printf(m, " %s%s %d", test_bit(i, &l3_ignored) ? "-" : "", l3_names[i], l3_holds[i]);
 	seq_putc(m, '\n');
