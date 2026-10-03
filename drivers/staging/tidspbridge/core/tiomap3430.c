@@ -1334,6 +1334,21 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 			pg_num = get_user_pages(ul_mpu_addr, 1, gup_flags,
 						&mapped_page);
 			if (pg_num > 0) {
+				dma_addr_t h;
+
+				/*
+				 * Write the page back and drop it from the D-cache before the DSP
+				 * gets it: gst-dsp never flushes its data buffers (stream headers,
+				 * bitstream, frames) and relied on Nokia's kernel, whose
+				 * get_user_pages() did that through flush_dcache_page(). ARM's
+				 * flush_dcache_page() no longer touches the D-cache on VIPT
+				 * non-aliasing caches, and the DSP read stale memory.
+				 */
+				h = dma_map_page(bridge, mapped_page, 0, PAGE_SIZE,
+						 DMA_BIDIRECTIONAL);
+				if (!dma_mapping_error(bridge, h))
+					dma_unmap_page(bridge, h, PAGE_SIZE,
+						       DMA_BIDIRECTIONAL);
 				if (page_count(mapped_page) < 1) {
 					pr_err("Bad page count after doing"
 					       "get_user_pages on"
