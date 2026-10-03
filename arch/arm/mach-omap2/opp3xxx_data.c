@@ -62,7 +62,11 @@ struct omap_volt_data omap36xx_vddmpu_volt_data[] = {
 	VOLT_DATA_DEFINE(OMAP3630_VDD_MPU_OPP100_UV, OMAP3630_CONTROL_FUSE_OPP100_VDD1, 0xf9, 0x16),
 	VOLT_DATA_DEFINE(OMAP3630_VDD_MPU_OPP120_UV, OMAP3630_CONTROL_FUSE_OPP120_VDD1, 0xfa, 0x23),
 	VOLT_DATA_DEFINE(OMAP3630_VDD_MPU_OPP1G_UV, OMAP3630_CONTROL_FUSE_OPP1G_VDD1, 0xfa, 0x27),
-	/* the N9's opt-in overclock (1.2 GHz boost OPP): no efuse of its own, OPP1G's gains */
+	/*
+	 * the N9's opt-in overclock (boost OPPs 1.1 and 1.2 GHz): no efuse of their own (so no
+	 * SmartReflex, sr_device.c), OPP1G's gains
+	 */
+	VOLT_DATA_DEFINE(1387500, OMAP3630_CONTROL_FUSE_OPP1G_VDD1, 0xfa, 0x27),
 	VOLT_DATA_DEFINE(1400000, OMAP3630_CONTROL_FUSE_OPP1G_VDD1, 0xfa, 0x27),
 	VOLT_DATA_DEFINE(0, 0, 0, 0),
 };

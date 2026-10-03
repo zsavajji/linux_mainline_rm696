@@ -297,8 +297,11 @@
  *	echo 1 > /sys/devices/system/cpu/cpufreq/boost
  * The N9 community's overclocks (talk.maemo.org) went to 1.2-1.3 GHz and settled on 1.2 GHz as the
  * daily ceiling; chips differ (some unstable past 950 MHz, others fine at 1.15 GHz). The ABB stays
- * in FBB (its 1.375 V entry, all ti-abb knows); VDD1 goes up 25 mV for 1.2 GHz (its regulator's
- * maximum is 1.45 V). The thermal zone still throttles.
+ * in FBB (its 1.375 V entry, all ti-abb knows); VDD1 goes up 12.5 mV for 1.1 GHz and 25 mV for
+ * 1.2 GHz (its regulator's maximum is 1.45 V). Each boost OPP needs a VDD1 voltage of its own:
+ * SmartReflex's nTarget is per voltage, and OPP1G's would steer a faster clock's VDD1 down to what
+ * 1 GHz needs; at a voltage without an eFuse of its own SmartReflex stays off. The thermal zone
+ * still throttles.
  */
 &cpu0_opp_table {
 	opp-1000000000 {
@@ -308,7 +311,7 @@
 
 	opp-1100000000 {
 		opp-hz = /bits/ 64 <1100000000>;
-		opp-microvolt = <1375000 1375000 1375000>,
+		opp-microvolt = <1387500 1387500 1387500>,
 				 <1375000 1375000 1375000>;
 		opp-supported-hw = <0xffffffff 3>;
 		turbo-mode;
