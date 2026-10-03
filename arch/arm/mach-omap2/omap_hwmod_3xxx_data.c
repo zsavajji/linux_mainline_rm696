@@ -1715,12 +1715,18 @@ static struct omap_hwmod_ocp_if omap3xxx_l4_per__timer4 = {
 };
 
 
-/* l4_per -> timer5 */
+/*
+ * l4_per -> timer5: GPT5-8 are the DSP's timers. DSP/BIOS asks the MPU to gate a timer's clocks
+ * (tidspbridge clock control), then busy-waits until CM_FCLKEN_PER and CM_ICLKEN_PER show them
+ * off: an interface clock enabled for good at setup (_setup_iclk_autoidle) never clears, and the
+ * DSP hangs at its first request. Enable these only while Linux uses the timer.
+ */
 static struct omap_hwmod_ocp_if omap3xxx_l4_per__timer5 = {
 	.master		= &omap3xxx_l4_per_hwmod,
 	.slave		= &omap3xxx_timer5_hwmod,
 	.clk		= "gpt5_ick",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
+	.flags		= OCPIF_SWSUP_IDLE,	/* a DSP timer: see timer5 */
 };
 
 
@@ -1730,6 +1736,7 @@ static struct omap_hwmod_ocp_if omap3xxx_l4_per__timer6 = {
 	.slave		= &omap3xxx_timer6_hwmod,
 	.clk		= "gpt6_ick",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
+	.flags		= OCPIF_SWSUP_IDLE,	/* a DSP timer: see timer5 */
 };
 
 
@@ -1739,6 +1746,7 @@ static struct omap_hwmod_ocp_if omap3xxx_l4_per__timer7 = {
 	.slave		= &omap3xxx_timer7_hwmod,
 	.clk		= "gpt7_ick",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
+	.flags		= OCPIF_SWSUP_IDLE,	/* a DSP timer: see timer5 */
 };
 
 
@@ -1748,6 +1756,7 @@ static struct omap_hwmod_ocp_if omap3xxx_l4_per__timer8 = {
 	.slave		= &omap3xxx_timer8_hwmod,
 	.clk		= "gpt8_ick",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
+	.flags		= OCPIF_SWSUP_IDLE,	/* a DSP timer: see timer5 */
 };
 
 
