@@ -1506,7 +1506,8 @@ static void dss_mgr_set_timings_compat(struct omap_overlay_manager *mgr,
 
 	spin_lock_irqsave(&data_lock, flags);
 
-	if (mp->updating) {
+	/* a split frame latched when it was asked for hasn't started: its first half sets them */
+	if (mp->updating && !mp->region_latched) {
 		DSSERR("cannot set timings for %s: manager needs to be disabled\n",
 			mgr->name);
 		goto out;
