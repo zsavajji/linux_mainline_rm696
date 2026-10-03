@@ -27,6 +27,7 @@
 
 /*  ----------------------------------- OS Adaptation Layer */
 #include <dspbridge/wdt.h>
+#include <dspbridge/mbx_sh.h>
 
 /*  ----------------------------------- specific to this file */
 #include "_tiomap.h"
@@ -423,6 +424,16 @@ int sm_interrupt_dsp(struct bridge_dev_context *dev_context, u16 mb_val)
 		/* Restart the peripheral clocks */
 		dsp_clock_enable_all(dev_context->dsp_per_clks);
 	}
+
+	/*
+	 * As Nokia's driver (its wake_dsp() in sm_interrupt_dsp()): a wakeup ahead of every message.
+	 * DSP/BIOS goes to sleep on its own once idle (it gates its tick timer, the "disable GPT5"
+	 * clock request) and only a DSPWAKEUP message ends that sleep, while the bridge still counts
+	 * it as running
+	 */
+	if (mb_val != MBX_PM_DSPWAKEUP && mb_val != MBX_PM_DSPIDLE &&
+	    dev_context->brd_state != BRD_STOPPED)
+		mbox_send_message(dev_context->mbox, (void *)(uintptr_t)MBX_PM_DSPWAKEUP);
 
 	status = mbox_send_message(dev_context->mbox,
 				   (void *)(uintptr_t)mb_val);
