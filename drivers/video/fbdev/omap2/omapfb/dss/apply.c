@@ -96,6 +96,11 @@ struct mgr_priv_data {
 
 	/* A frame written in two halves (dss_mgr_start_update_region) between its halves */
 	bool region_open;
+	/* its overlays latched when it was asked for (dss_mgr_latch_region), not at its first half */
+	bool region_latched;
+	/* asked for (latched or noted) and not started: frames a flip changed meanwhile */
+	bool region_noted;
+	unsigned int region_changed;
 
 	bool extra_info_dirty;
 	bool shadow_extra_info_dirty;
@@ -940,7 +945,7 @@ static void dss_register_vsync_isr(void);
 static struct {
 	struct omap_overlay_info info;
 	bool enabled;
-} region_ovl[MAX_DSS_OVERLAYS];
+} region_ovl[MAX_DSS_OVERLAYS], region_req[MAX_DSS_OVERLAYS];
 
 /*
  * A manual update of the columns [x, x + w) only, for a DSI command-mode panel written in two halves
@@ -964,7 +969,7 @@ static void dss_mgr_start_update_region_compat(struct omap_overlay_manager *mgr,
 	spin_lock_irqsave(&data_lock, flags);
 
 	if (first) {
-		WARN_ON(mp->updating);
+		WARN_ON(mp->updating && !mp->region_latched);
 
 		if (dss_check_settings(mgr)) {
 			DSSERR("cannot start manual update: illegal configuration\n");
@@ -976,9 +981,19 @@ static void dss_mgr_start_update_region_compat(struct omap_overlay_manager *mgr,
 		dss_mgr_write_regs_extra(mgr);
 
 		list_for_each_entry(ovl, &mgr->overlays, list) {
-			region_ovl[ovl->id].info = get_ovl_priv(ovl)->info;
-			region_ovl[ovl->id].enabled = get_ovl_priv(ovl)->enabled;
+			struct ovl_priv_data *op = get_ovl_priv(ovl);
+
+			if (mp->region_noted && (region_req[ovl->id].enabled != op->enabled ||
+			    (op->enabled && region_req[ovl->id].info.paddr != op->info.paddr))) {
+				mp->region_changed++;
+				mp->region_noted = false;
+			}
+			if (!mp->region_latched) {
+				region_ovl[ovl->id].info = op->info;
+				region_ovl[ovl->id].enabled = op->enabled;
+			}
 		}
+		mp->region_latched = mp->region_noted = false;
 		mp->region_open = true;
 	} else {
 		mp->region_open = false;
@@ -1067,6 +1082,43 @@ static void dss_unregister_vsync_isr(void)
 	WARN_ON(r);
 
 	dss_data.irq_enabled = false;
+}
+
+/*
+ * A split update's frame when it's asked for (the panel's request, before its first half waits for
+ * TE): DSS_REGION_LATCH takes its overlays now and counts the manager as updating from now, as Nokia's
+ * omap_dss_lock_cache(): a flip (pan) made before the first half waits for the next frame instead of
+ * replacing this one, and its notifications (X's next update) come once this frame is out, so X doesn't
+ * block on the panel meanwhile. DSS_REGION_NOTE only notes the overlays (latched at the first half).
+ * Both count the frames a flip changed in between (shown as replaced, or as kept). DSS_REGION_RELEASE:
+ * the update won't happen (split failure, no TE), let go and send the notifications
+ */
+static unsigned int dss_mgr_latch_region_compat(struct omap_overlay_manager *mgr, int how)
+{
+	struct mgr_priv_data *mp = get_mgr_priv(mgr);
+	struct omap_overlay *ovl;
+	unsigned long flags;
+	unsigned int changed;
+
+	spin_lock_irqsave(&data_lock, flags);
+	if (how == DSS_REGION_RELEASE) {
+		mp->region_latched = mp->region_noted = mp->region_open = false;
+		mp->updating = dispc_mgr_is_enabled(mgr->id);
+		dss_run_notifiers();
+	} else {
+		list_for_each_entry(ovl, &mgr->overlays, list) {
+			region_req[ovl->id].info = get_ovl_priv(ovl)->info;
+			region_req[ovl->id].enabled = get_ovl_priv(ovl)->enabled;
+			if (how == DSS_REGION_LATCH)
+				region_ovl[ovl->id] = region_req[ovl->id];
+		}
+		mp->region_noted = true;
+		if (how == DSS_REGION_LATCH)
+			mp->region_latched = mp->region_open = mp->updating = true;
+	}
+	changed = mp->region_changed;
+	spin_unlock_irqrestore(&data_lock, flags);
+	return changed;
 }
 
 static void dss_apply_irq_handler(void *data, u32 mask)
@@ -1778,6 +1830,7 @@ static const struct dss_mgr_ops apply_mgr_ops = {
 	.disconnect = dss_mgr_disconnect_compat,
 	.start_update = dss_mgr_start_update_compat,
 	.start_update_region = dss_mgr_start_update_region_compat,
+	.latch_region = dss_mgr_latch_region_compat,
 	.enable = dss_mgr_enable_compat,
 	.disable = dss_mgr_disable_compat,
 	.set_timings = dss_mgr_set_timings_compat,

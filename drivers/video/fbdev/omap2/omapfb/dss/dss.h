@@ -487,6 +487,7 @@ struct dss_mgr_ops {
 
 	void (*start_update)(struct omap_overlay_manager *mgr);
 	void (*start_update_region)(struct omap_overlay_manager *mgr, u16 x, u16 w, bool first);
+	unsigned int (*latch_region)(struct omap_overlay_manager *mgr, int how);
 	int (*enable)(struct omap_overlay_manager *mgr);
 	void (*disable)(struct omap_overlay_manager *mgr);
 	void (*set_timings)(struct omap_overlay_manager *mgr,
@@ -514,6 +515,7 @@ int dss_mgr_enable(struct omap_overlay_manager *mgr);
 void dss_mgr_disable(struct omap_overlay_manager *mgr);
 void dss_mgr_start_update(struct omap_overlay_manager *mgr);
 void dss_mgr_start_update_region(struct omap_overlay_manager *mgr, u16 x, u16 w, bool first);
+unsigned int dss_mgr_latch_region(struct omap_overlay_manager *mgr, int how);
 int dss_mgr_register_framedone_handler(struct omap_overlay_manager *mgr,
 		void (*handler)(void *), void *data);
 void dss_mgr_unregister_framedone_handler(struct omap_overlay_manager *mgr,

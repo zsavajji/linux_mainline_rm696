@@ -135,6 +135,13 @@ struct panel_drv_data {
 	 */
 	ktime_t stats_last;
 	u32 stats[5], phase[4], late_starts;
+	/*
+	 * A split update's frame latched when it's asked for (sysfs region_latch, as stock) or at its
+	 * first half; early_pans: frames a flip changed between the two (kept, or replaced unseen), and
+	 * blocked: updates that waited over 1 ms for the previous frame (X stalls meanwhile)
+	 */
+	bool region_latch;
+	u32 early_pans, early_pans_base, blocked, blocked_ms;
 	u32 split_late_us;
 	struct pm_qos_request idle_qos;
 	u32 idle_latency_us;
@@ -914,8 +921,10 @@ static ssize_t dsicm_update_stats_show(struct device *dev, struct device_attribu
 	u32 *p = ddata->phase;
 
 	return sysfs_emit(buf, "1:%u 2:%u 3:%u 4+:%u pauses:%u | requests at TE+ 0-1ms:%u 1-2ms:%u "
-			  "2-15ms:%u 15ms+:%u | late starts:%u\n", n[1], n[2], n[3], n[4], n[0],
-			  p[0], p[1], p[2], p[3], ddata->late_starts);
+			  "2-15ms:%u 15ms+:%u | late starts:%u | early pans:%u (%s) blocked:%u (%u ms)\n",
+			  n[1], n[2], n[3], n[4], n[0], p[0], p[1], p[2], p[3], ddata->late_starts,
+			  ddata->early_pans - ddata->early_pans_base,
+			  ddata->region_latch ? "kept" : "replaced", ddata->blocked, ddata->blocked_ms);
 }
 
 /* Any write clears them */
@@ -928,6 +937,8 @@ static ssize_t dsicm_update_stats_store(struct device *dev, struct device_attrib
 	memset(ddata->stats, 0, sizeof(ddata->stats));
 	memset(ddata->phase, 0, sizeof(ddata->phase));
 	ddata->late_starts = 0;
+	ddata->early_pans_base = ddata->early_pans;
+	ddata->blocked = ddata->blocked_ms = 0;
 	mutex_unlock(&ddata->lock);
 	return count;
 }
@@ -998,6 +1009,22 @@ static ssize_t dsicm_l3_lpm_hold_store(struct device *dev, struct device_attribu
 	return count;
 }
 
+static ssize_t dsicm_region_latch_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ddata->region_latch);
+}
+
+static ssize_t dsicm_region_latch_store(struct device *dev, struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	int r = kstrtobool(buf, &ddata->region_latch);
+
+	return r ? r : count;
+}
+
 static DEVICE_ATTR(split_late_us, S_IRUGO | S_IWUSR, dsicm_split_late_us_show,
 		   dsicm_split_late_us_store);
 static DEVICE_ATTR(update_stats, S_IRUGO | S_IWUSR, dsicm_update_stats_show,
@@ -1006,11 +1033,14 @@ static DEVICE_ATTR(idle_latency_us, S_IRUGO | S_IWUSR, dsicm_idle_latency_us_sho
 		   dsicm_idle_latency_us_store);
 static DEVICE_ATTR(l3_lpm_hold, S_IRUGO | S_IWUSR, dsicm_l3_lpm_hold_show,
 		   dsicm_l3_lpm_hold_store);
+static DEVICE_ATTR(region_latch, S_IRUGO | S_IWUSR, dsicm_region_latch_show,
+		   dsicm_region_latch_store);
 
 static struct attribute *dsicm_attrs[] = {
 	&dev_attr_update_stats.attr,
 	&dev_attr_idle_latency_us.attr,
 	&dev_attr_l3_lpm_hold.attr,
+	&dev_attr_region_latch.attr,
 	&dev_attr_split_late_us.attr,
 	&dev_attr_num_dsi_errors.attr,
 	&dev_attr_hw_revision.attr,
@@ -1419,6 +1449,7 @@ static void dsicm_split_fail(struct panel_drv_data *ddata)
 	dev_err(&ddata->pdev->dev, "split update failed\n");
 	atomic_set(&ddata->split_state, DSICM_SPLIT_NONE);
 	cancel_delayed_work(&ddata->te_timeout_work);
+	ddata->in->ops.dsi->latch_region(ddata->in, DSS_REGION_RELEASE);
 	ddata->in->ops.dsi->bus_unlock(ddata->in);
 }
 
@@ -1606,7 +1637,8 @@ static void dsicm_te_timeout_work_callback(struct work_struct *work)
 	dev_err(&ddata->pdev->dev, "TE not received for 250ms!\n");
 
 	atomic_set(&ddata->do_update, 0);
-	atomic_set(&ddata->split_state, DSICM_SPLIT_NONE);
+	if (atomic_xchg(&ddata->split_state, DSICM_SPLIT_NONE) != DSICM_SPLIT_NONE)
+		in->ops.dsi->latch_region(in, DSS_REGION_RELEASE);
 	in->ops.dsi->bus_unlock(in);
 }
 
@@ -1615,6 +1647,8 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
 	struct omap_dss_device *in = ddata->in;
+	ktime_t t0;
+	u32 waited;
 	int r;
 
 	dev_dbg(&ddata->pdev->dev, "update %d, %d, %d x %d\n", x, y, w, h);
@@ -1622,7 +1656,13 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 	mutex_lock(&ddata->lock);
 	if (ddata->lpm_pending)
 		mod_delayed_work(system_wq, &ddata->lpm_work, msecs_to_jiffies(DSICM_LPM_DELAY_MS));
+	t0 = ktime_get();
 	in->ops.dsi->bus_lock(in);
+	waited = ktime_us_delta(ktime_get(), t0);
+	if (waited > 1000) {
+		ddata->blocked++;
+		ddata->blocked_ms += waited / 1000;
+	}
 
 	r = dsicm_wake_up(ddata);
 	if (r)
@@ -1642,6 +1682,8 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 		r = dsicm_set_update_window(ddata, hx, 0, hw, ddata->timings.y_res);
 		if (r)
 			goto err;
+		ddata->early_pans = in->ops.dsi->latch_region(in, ddata->region_latch ?
+							      DSS_REGION_LATCH : DSS_REGION_NOTE);
 		schedule_delayed_work(&ddata->te_timeout_work, msecs_to_jiffies(250));
 		atomic_set(&ddata->split_state, DSICM_HALF1_WAIT);
 		dsicm_split_late_start(ddata);
@@ -2063,6 +2105,7 @@ static int dsicm_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&ddata->lpm_work, dsicm_lpm_work);
 	ddata->idle_latency_us = 6000;
 	ddata->split_late_us = 2000;
+	ddata->region_latch = true;
 
 	dsicm_hw_reset(ddata);
 

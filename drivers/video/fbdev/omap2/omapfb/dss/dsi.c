@@ -4090,6 +4090,11 @@ static int dsi_update_region(struct omap_dss_device *dssdev, int channel,
 	return 0;
 }
 
+static unsigned int dsi_latch_region(struct omap_dss_device *dssdev, int how)
+{
+	return dss_mgr_latch_region(dssdev->manager, how);
+}
+
 /* Display funcs */
 
 static int dsi_configure_dispc_clocks(struct platform_device *dsidev)
@@ -5054,6 +5059,7 @@ static const struct omapdss_dsi_ops dsi_ops = {
 
 	.update = dsi_update,
 	.update_region = dsi_update_region,
+	.latch_region = dsi_latch_region,
 
 	.enable_te = dsi_enable_te,
 

@@ -554,6 +554,8 @@ struct omapdss_hdmi_ops {
 		const struct hdmi_avi_infoframe *avi);
 };
 
+enum { DSS_REGION_RELEASE, DSS_REGION_LATCH, DSS_REGION_NOTE };
+
 struct omapdss_dsi_ops {
 	int (*connect)(struct omap_dss_device *dssdev,
 			struct omap_dss_device *dst);
@@ -582,6 +584,12 @@ struct omapdss_dsi_ops {
 	 */
 	int (*update_region)(struct omap_dss_device *dssdev, int channel,
 			u16 x, u16 w, bool first, void (*callback)(int, void *), void *data);
+	/*
+	 * A split update's frame when it's asked for: DSS_REGION_LATCH latches it, DSS_REGION_NOTE only
+	 * notes it (latched at the first half, as before), DSS_REGION_RELEASE lets go of an update that
+	 * won't happen. Returns how many frames a flip changed between their request and their first half
+	 */
+	unsigned int (*latch_region)(struct omap_dss_device *dssdev, int how);
 
 	void (*bus_lock)(struct omap_dss_device *dssdev);
 	void (*bus_unlock)(struct omap_dss_device *dssdev);
