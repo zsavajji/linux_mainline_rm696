@@ -715,6 +715,39 @@ int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
 	return ret;
 }
 
+/**
+ * omap_sr_idle_pause() - stop SmartReflex on a VDD whose domains are going to sleep
+ * @voltdm:	the VDD
+ * @reset:	also force its nominal voltage (the VC may take it to retention and back to that)
+ *
+ * From omap_sram_idle(), interrupts off: Nokia's N9 kernel stopped SmartReflex before the MPU
+ * or CORE entered retention or off, and restarted it after the wakeup (pm34xx.c). No-op unless
+ * SR is running. Nothing else runs on the (single) CPU until omap_sr_idle_resume(); and
+ * sr_lock's holders don't sleep, so it can't be taken here, but if it ever were, SR is left
+ * alone. Returns true if it stopped SR.
+ */
+bool omap_sr_idle_pause(struct voltagedomain *voltdm, bool reset)
+{
+	struct omap_sr *sr;
+
+	if (mutex_is_locked(&sr_lock))
+		return false;
+	sr = _sr_lookup(voltdm);
+	if (IS_ERR(sr) || !sr->enabled)
+		return false;
+	sr_class->disable(sr, reset);
+	return true;
+}
+
+/* After the wakeup, for a VDD omap_sr_idle_pause() stopped: SR restarts where the VP is */
+void omap_sr_idle_resume(struct voltagedomain *voltdm)
+{
+	struct omap_sr *sr = _sr_lookup(voltdm);
+
+	if (!IS_ERR(sr))
+		sr_class->enable(sr);
+}
+
 /* PM Debug FS entries to enable and disable smartreflex. */
 static int omap_sr_autocomp_show(void *data, u64 *val)
 {
