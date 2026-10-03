@@ -18,6 +18,8 @@
 #include <linux/hashtable.h>
 #include <linux/slab.h>
 
+#include <dspbridge/gh.h>
+
 struct gh_node {
 	struct hlist_node hl;
 	u8 data[0];

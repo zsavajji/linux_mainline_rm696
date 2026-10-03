@@ -116,6 +116,7 @@ module_param(tc_wordswapon, int, 0);
 MODULE_PARM_DESC(tc_wordswapon, "TC Word Swap Option. default = 0");
 
 MODULE_AUTHOR("Texas Instruments");
+MODULE_DESCRIPTION("TI DSP/BIOS Bridge driver for the OMAP3 IVA2.2");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DSPBRIDGE_VERSION);
 

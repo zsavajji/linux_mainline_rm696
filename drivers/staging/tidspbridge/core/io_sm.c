@@ -266,7 +266,7 @@ int bridge_io_destroy(struct io_mgr *hio_mgr)
 	return status;
 }
 
-struct shm_symbol_val *_get_shm_symbol_values(struct io_mgr *hio_mgr)
+static struct shm_symbol_val *_get_shm_symbol_values(struct io_mgr *hio_mgr)
 {
 	struct shm_symbol_val *s;
 	struct cod_manager *cod_man;

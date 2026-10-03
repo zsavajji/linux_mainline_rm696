@@ -399,7 +399,7 @@ void dload_relocate(struct dload_state *dlthis, tgt_au_t *data,
 					reloc_amt = dlthis->ldr_sections
 					    [svp->secnn - 1].run_addr;
 		}
-		/* !!! FALL THRU !!! */
+		fallthrough;
 	case RACT_C6BASE:
 		if (dlthis->bss_run_base == 0) {
 			struct dynload_symbol *symp;
@@ -417,7 +417,7 @@ void dload_relocate(struct dload_state *dlthis, tgt_au_t *data,
 					    rp->vaddr + dlthis->image_offset);
 		}
 		reloc_amt -= dlthis->bss_run_base;
-		/* !!! FALL THRU !!! */
+		fallthrough;
 	case RACT_C6DSPL:
 		/* scale factor determined by 3 LSBs of field */
 		scale = c60_scale[val & SCALE_MASK];

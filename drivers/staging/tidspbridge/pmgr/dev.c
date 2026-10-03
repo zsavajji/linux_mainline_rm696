@@ -82,7 +82,6 @@ struct drv_ext {
 };
 
 /*  ----------------------------------- Function Prototypes */
-static int fxn_not_implemented(int arg, ...);
 static int init_cod_mgr(struct dev_object *dev_obj);
 static void store_interface_fxns(struct bridge_drv_interface *drv_fxns,
 				 struct bridge_drv_interface *intf_fxns);
@@ -773,20 +772,6 @@ int dev_start_device(struct cfg_devnode *dev_node_obj)
 }
 
 /*
- *  ======== fxn_not_implemented ========
- *  Purpose:
- *      Takes the place of a Bridge Null Function.
- *  Parameters:
- *      Multiple, optional.
- *  Returns:
- *      -ENOSYS:   Always.
- */
-static int fxn_not_implemented(int arg, ...)
-{
-	return -ENOSYS;
-}
-
-/*
  *  ======== init_cod_mgr ========
  *  Purpose:
  *      Create a COD manager for this device.
@@ -892,13 +877,8 @@ int dev_get_dev_type(struct dev_object *dev_obj, u8 *dev_type)
 /*
  *  ======== store_interface_fxns ========
  *  Purpose:
- *      Copy the Bridge's interface functions into the device object,
- *      ensuring that fxn_not_implemented() is set for:
- *
- *      1. All Bridge function pointers which are NULL; and
- *      2. All function slots in the struct dev_object structure which have no
- *         corresponding slots in the the Bridge's interface, because the Bridge
- *         is of an *older* version.
+ *      Copy the Bridge's interface functions into the device object.
+ *      The Bridge (tiomap3430.c) implements every slot.
  *  Parameters:
  *      intf_fxns:      Interface fxn Structure of the Bridge's Dev Object.
  *      drv_fxns:      Interface Fxns offered by the Bridge during DEV_Create().
@@ -906,8 +886,6 @@ int dev_get_dev_type(struct dev_object *dev_obj, u8 *dev_type)
  *  Requires:
  *      Input pointers are valid.
  *      Bridge driver is *not* written for a newer DSP API.
- *  Ensures:
- *      All function pointers in the dev object's fxn interface are not NULL.
  */
 static void store_interface_fxns(struct bridge_drv_interface *drv_fxns,
 				 struct bridge_drv_interface *intf_fxns)
@@ -916,8 +894,7 @@ static void store_interface_fxns(struct bridge_drv_interface *drv_fxns,
 
 	/* Local helper macro: */
 #define  STORE_FXN(cast, pfn) \
-	(intf_fxns->pfn = ((drv_fxns->pfn != NULL) ? drv_fxns->pfn : \
-			   (cast)fxn_not_implemented))
+	(intf_fxns->pfn = drv_fxns->pfn)
 
 	bridge_version = MAKEVERSION(drv_fxns->brd_api_major_version,
 				     drv_fxns->brd_api_minor_version);

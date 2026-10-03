@@ -74,7 +74,17 @@ static struct dbll_fxns ldr_fxns = {
 	(dbll_unload_fxn) dbll_unload,
 };
 
-static bool no_op(void);
+static s32 no_op_alloc(void *hdl, s32 space, u32 size, u32 align,
+		       u32 *dsp_address, s32 seg_id, s32 req, bool reserved)
+{
+	return true;
+}
+
+static bool no_op_free(void *hdl, u32 addr, s32 space, u32 size,
+		       bool reserved)
+{
+	return true;
+}
 
 /*
  * File operations (originally were under kfile.c)
@@ -201,8 +211,8 @@ int cod_create(struct cod_manager **mgr, char *str_zl_file)
 	/* initialize the ZL module */
 	mgr_new->fxns.init_fxn();
 
-	zl_attrs.alloc = (dbll_alloc_fxn) no_op;
-	zl_attrs.free = (dbll_free_fxn) no_op;
+	zl_attrs.alloc = no_op_alloc;
+	zl_attrs.free = no_op_free;
 	zl_attrs.fread = (dbll_read_fxn) cod_f_read;
 	zl_attrs.fseek = (dbll_seek_fxn) cod_f_seek;
 	zl_attrs.ftell = (dbll_tell_fxn) cod_f_tell;
@@ -409,8 +419,8 @@ int cod_load_base(struct cod_manager *cod_mgr_obj, u32 num_argc, char *args[],
 	new_attrs = save_attrs;
 	new_attrs.write = (dbll_write_fxn) pfn_write;
 	new_attrs.input_params = arb;
-	new_attrs.alloc = (dbll_alloc_fxn) no_op;
-	new_attrs.free = (dbll_free_fxn) no_op;
+	new_attrs.alloc = no_op_alloc;
+	new_attrs.free = no_op_free;
 	new_attrs.log_write = NULL;
 	new_attrs.log_write_handle = NULL;
 
@@ -512,15 +522,4 @@ int cod_read_section(struct cod_libraryobj *lib, char *str_sect,
 		status = -ESPIPE;
 
 	return status;
-}
-
-/*
- *  ======== no_op ========
- *  Purpose:
- *      No Operation.
- *
- */
-static bool no_op(void)
-{
-	return true;
 }

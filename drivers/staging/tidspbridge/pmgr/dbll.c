@@ -1302,7 +1302,7 @@ static int fill_mem(struct dynamic_loader_initialize *this, ldr_addr addr,
 	   memory. This is a trick to just get the start address, there is no
 	   writing taking place with this Writemem
 	 */
-	if ((lib->target_obj->attrs.write) != (dbll_write_fxn) no_op)
+	if ((void *)lib->target_obj->attrs.write != (void *)no_op)
 		write_mem(this, &pbuf, addr, info, 0);
 	if (pbuf)
 		memset(pbuf, val, bytes);

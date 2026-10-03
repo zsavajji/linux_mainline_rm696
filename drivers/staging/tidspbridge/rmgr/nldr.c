@@ -284,12 +284,12 @@ static int load_lib(struct nldr_nodeobject *nldr_node_obj,
 			   enum nldr_phase phase, u16 depth);
 static int load_ovly(struct nldr_nodeobject *nldr_node_obj,
 			    enum nldr_phase phase);
-static int remote_alloc(void **ref, u16 mem_sect, u32 size,
-			       u32 align, u32 *dsp_address,
-			       s32 segmnt_id,
-			       s32 req, bool reserve);
-static int remote_free(void **ref, u16 space, u32 dsp_address, u32 size,
-			      bool reserve);
+static s32 remote_alloc(void *ref, s32 mem_sect, u32 size,
+			u32 align, u32 *dsp_address,
+			s32 segmnt_id,
+			s32 req, bool reserve);
+static bool remote_free(void *ref, u32 space, s32 dsp_address, u32 size,
+			bool reserve);
 
 static void unload_lib(struct nldr_nodeobject *nldr_node_obj,
 		       struct lib_node *root);
@@ -509,8 +509,8 @@ int nldr_create(struct nldr_object **nldr,
 		/* set the alloc, free, write functions for loader */
 		nldr_obj->ldr_fxns.get_attrs_fxn(nldr_obj->dbll, &save_attrs);
 		new_attrs = save_attrs;
-		new_attrs.alloc = (dbll_alloc_fxn) remote_alloc;
-		new_attrs.free = (dbll_free_fxn) remote_free;
+		new_attrs.alloc = remote_alloc;
+		new_attrs.free = remote_free;
 		new_attrs.sym_lookup = (dbll_sym_lookup) get_symbol_value;
 		new_attrs.sym_handle = nldr_obj;
 		new_attrs.write = (dbll_write_fxn) pattrs->write;
@@ -1526,10 +1526,10 @@ func_end:
 /*
  *  ======== remote_alloc ========
  */
-static int remote_alloc(void **ref, u16 mem_sect, u32 size,
-			       u32 align, u32 *dsp_address,
-			       s32 segmnt_id, s32 req,
-			       bool reserve)
+static s32 remote_alloc(void *ref, s32 mem_sect, u32 size,
+			u32 align, u32 *dsp_address,
+			s32 segmnt_id, s32 req,
+			bool reserve)
 {
 	struct nldr_nodeobject *hnode = (struct nldr_nodeobject *)ref;
 	struct nldr_object *nldr_obj;
@@ -1640,13 +1640,13 @@ func_cont:
 	return status;
 }
 
-static int remote_free(void **ref, u16 space, u32 dsp_address,
-			      u32 size, bool reserve)
+/* Returns true if the block was freed (the loader ignores it) */
+static bool remote_free(void *ref, u32 space, s32 dsp_address,
+			u32 size, bool reserve)
 {
 	struct nldr_object *nldr_obj = (struct nldr_object *)ref;
 	struct rmm_target_obj *rmm;
 	u32 word_size;
-	int status = -ENOMEM;	/* Set to fail */
 
 	rmm = nldr_obj->rmm;
 
@@ -1655,10 +1655,7 @@ static int remote_free(void **ref, u16 space, u32 dsp_address,
 	    (size + nldr_obj->dsp_word_size -
 	     1) / nldr_obj->dsp_word_size;
 
-	if (rmm_free(rmm, space, dsp_address, word_size, reserve))
-		status = 0;
-
-	return status;
+	return rmm_free(rmm, space, dsp_address, word_size, reserve);
 }
 
 /*
