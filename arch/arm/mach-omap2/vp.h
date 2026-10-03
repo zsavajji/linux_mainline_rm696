@@ -107,6 +107,8 @@ extern struct omap_vp_instance omap4_vp_core;
 
 extern struct omap_vp_param omap3_mpu_vp_data;
 extern struct omap_vp_param omap3_core_vp_data;
+extern struct omap_vp_param omap36xx_mpu_vp_data;
+extern struct omap_vp_param omap36xx_core_vp_data;
 
 extern struct omap_vp_param omap4_mpu_vp_data;
 extern struct omap_vp_param omap4_iva_vp_data;
