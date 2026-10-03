@@ -4,7 +4,7 @@
 
 menuconfig TIDSPBRIDGE
 	tristate "DSP Bridge driver"
-	depends on ARCH_OMAP3 && !ARCH_MULTIPLATFORM && BROKEN
+	depends on ARCH_OMAP3 && OF
 	select MAILBOX
 	select OMAP2PLUS_MBOX
 	help
@@ -13,7 +13,10 @@ menuconfig TIDSPBRIDGE
 	  "host" processor, and the attached DSPs are processing resources
 	  that can be utilized by applications and drivers running on the GPP.
 
-	  This driver depends on OMAP Mailbox (OMAP_MBOX_FWK).
+	  This driver depends on the OMAP mailbox (OMAP2PLUS_MBOX).
+
+	  To compile it as a module, choose M here: the module will be
+	  called bridgedriver.
 
 config TIDSPBRIDGE_DVFS
 	bool "Enable Bridge Dynamic Voltage and Frequency Scaling (DVFS)"

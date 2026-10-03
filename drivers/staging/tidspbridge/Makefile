@@ -1,4 +1,4 @@
-obj-$(CONFIG_TIDSPBRIDGE)	+= tidspbridge.o
+obj-$(CONFIG_TIDSPBRIDGE)	+= bridgedriver.o
 
 libgen = gen/gh.o
 libcore = core/chnl_sm.o core/msg_sm.o core/io_sm.o core/tiomap3430.o \
@@ -13,7 +13,7 @@ libdload = dynload/cload.o dynload/getsection.o dynload/reloc.o \
 		 dynload/tramp.o
 libhw = hw/hw_mmu.o
 
-tidspbridge-y := $(libgen) $(libservices) $(libcore) $(libpmgr) $(librmgr) \
+bridgedriver-y := $(libgen) $(libcore) $(libpmgr) $(librmgr) \
 			$(libdload) $(libhw)
 
 #Machine dependent
@@ -21,12 +21,11 @@ ccflags-y += -D_TI_ -D_DB_TIOMAP -DTMS32060 \
 		-DTICFG_PROC_VER -DTICFG_EVM_TYPE -DCHNL_SMCLASS \
 		-DCHNL_MESSAGES -DUSE_LEVEL_1_MACROS
 
-ccflags-y += -Idrivers/staging/tidspbridge/include
-ccflags-y += -Idrivers/staging/tidspbridge/services
-ccflags-y += -Idrivers/staging/tidspbridge/core
-ccflags-y += -Idrivers/staging/tidspbridge/pmgr
-ccflags-y += -Idrivers/staging/tidspbridge/rmgr
-ccflags-y += -Idrivers/staging/tidspbridge/dynload
-ccflags-y += -Idrivers/staging/tidspbridge/hw
-ccflags-y += -Iarch/arm
+ccflags-y += -I$(src)/include
+ccflags-y += -I$(src)/core
+ccflags-y += -I$(src)/pmgr
+ccflags-y += -I$(src)/rmgr
+ccflags-y += -I$(src)/dynload
+ccflags-y += -I$(src)/hw
+ccflags-y += -I$(srctree)/arch/arm
 
