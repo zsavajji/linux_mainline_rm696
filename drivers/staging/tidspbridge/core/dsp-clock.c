@@ -164,18 +164,28 @@ void dsp_clk_exit(void)
  */
 void dsp_clk_init(void)
 {
+	struct clk *clk_32k = clk_get(NULL, "omap_32k_fck");
 	char name[16];
 	int i;
 
 	for (i = 0; i < DM_TIMER_CLOCKS; i++) {
 		snprintf(name, sizeof(name), "gpt%d_fck", i + 5);
 		gpt_fck[i] = dsp_clk_get_prepared(name);
+		/*
+		 * The 32 kHz clock, as dmtimer's OMAP_TIMER_SRC_32_KHZ did: DSP/BIOS sets its tick
+		 * (GPT5) for 32768 Hz, and on the system clock it ticked every 1.7 us instead of 1 ms
+		 */
+		if (!IS_ERR_OR_NULL(gpt_fck[i]) && !IS_ERR(clk_32k) &&
+		    clk_set_parent(gpt_fck[i], clk_32k))
+			dev_err(bridge, "%s: no 32 kHz clock\n", name);
 		snprintf(name, sizeof(name), "gpt%d_ick", i + 5);
 		gpt_ick[i] = dsp_clk_get_prepared(name);
 		gpt_regs[i] = ioremap(gpt_base[i], SZ_4K);
 	}
 
 	iva2_clk = dsp_clk_get_prepared("iva2_ck");
+	if (!IS_ERR(clk_32k))
+		clk_put(clk_32k);
 }
 
 static void gpt_write(void __iomem *base, u32 reg, u32 val)
