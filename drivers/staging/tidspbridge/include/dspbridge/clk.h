@@ -96,6 +96,4 @@ extern u32 dsp_clk_get_iva2_rate(void);
 
 u32 dsp_clock_disable_all(u32 dsp_per_clocks);
 
-extern void ssi_clk_prepare(bool FLAG);
-
 #endif /* _SYNC_H */

@@ -16,14 +16,10 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#define L4_34XX_BASE		0x48000000
-
 #include <linux/types.h>
 
 /*  ----------------------------------- Host OS */
 #include <dspbridge/host_os.h>
-#include <plat/dmtimer.h>
-#include <linux/platform_data/asoc-ti-mcbsp.h>
 
 /*  ----------------------------------- DSP/BIOS Bridge */
 #include <dspbridge/dbdefs.h>
@@ -36,14 +32,6 @@
 
 /*  ----------------------------------- Defines, Data Structures, Typedefs */
 
-#define OMAP_SSI_OFFSET			0x58000
-#define OMAP_SSI_SIZE			0x1000
-#define OMAP_SSI_SYSCONFIG_OFFSET	0x10
-
-#define SSI_AUTOIDLE			(1 << 0)
-#define SSI_SIDLE_SMARTIDLE		(2 << 3)
-#define SSI_MIDLE_NOIDLE		(1 << 12)
-
 /* Clk types requested by the dsp */
 #define IVA2_CLK	0
 #define GPT_CLK		1
@@ -51,24 +39,35 @@
 #define MCBSP_CLK	3
 #define SSI_CLK		4
 
-/* Bridge GPT id (1 - 4), DM Timer id (5 - 8) */
-#define DMT_ID(id) ((id) + 4)
+/* Bridge GPT id (1 - 4) is OMAP GPTIMER 5 - 8 */
 #define DM_TIMER_CLOCKS		4
 
-/* Bridge MCBSP id (6 - 10), OMAP Mcbsp id (0 - 4) */
-#define MCBSP_ID(id) ((id) - 6)
+/* GPTIMER registers, for dsp_gpt_wait_overflow() */
+#define GPT_TISR		0x18
+#define GPT_TIER		0x1c
+#define GPT_TCLR		0x24
+#define GPT_TCRR		0x28
+#define GPT_TLDR		0x2c
+#define GPT_TWPS		0x34
+#define GPT_TCLR_ST		BIT(0)
+#define GPT_TCLR_AR		BIT(1)
+#define GPT_INT_OVERFLOW	BIT(1)
 
-static struct omap_dm_timer *timer[4];
-
-struct clk *iva2_clk;
-
-struct dsp_ssi {
-	struct clk *sst_fck;
-	struct clk *ssr_fck;
-	struct clk *ick;
+static const u32 gpt_base[DM_TIMER_CLOCKS] = {
+	0x49038000, 0x4903a000, 0x4903c000, 0x4903e000,
 };
 
-static struct dsp_ssi ssi;
+/*
+ * GPTIMER 5-8 belong to the DSP: the bridge only gates their interface and
+ * functional clocks (clkdev aliases of the OMAP3 clock tree) when the DSP
+ * asks, the DSP programs the timers itself, as on Nokia's bridge.
+ */
+static struct clk *gpt_fck[DM_TIMER_CLOCKS];
+static struct clk *gpt_ick[DM_TIMER_CLOCKS];
+/* mapped at init: dsp_gpt_wait_overflow() runs in the MMU fault tasklet */
+static void __iomem *gpt_regs[DM_TIMER_CLOCKS];
+
+struct clk *iva2_clk;
 
 static u32 dsp_clocks;
 
@@ -107,6 +106,32 @@ static s8 get_clk_type(u8 id)
 	return type;
 }
 
+/* A missing clock becomes NULL, which the clk API treats as a no-op. */
+static struct clk *dsp_clk_get_prepared(const char *name)
+{
+	struct clk *clk = clk_get(bridge, name);
+
+	if (IS_ERR(clk)) {
+		dev_err(bridge, "failed to get clock %s: %ld\n", name,
+			PTR_ERR(clk));
+		return NULL;
+	}
+	if (clk_prepare(clk)) {
+		dev_err(bridge, "failed to prepare clock %s\n", name);
+		clk_put(clk);
+		return NULL;
+	}
+	return clk;
+}
+
+static void dsp_clk_put_prepared(struct clk *clk)
+{
+	if (!clk)
+		return;
+	clk_unprepare(clk);
+	clk_put(clk);
+}
+
 /*
  *  ======== dsp_clk_exit ========
  *  Purpose:
@@ -118,17 +143,18 @@ void dsp_clk_exit(void)
 
 	dsp_clock_disable_all(dsp_clocks);
 
-	for (i = 0; i < DM_TIMER_CLOCKS; i++)
-		omap_dm_timer_free(timer[i]);
+	for (i = 0; i < DM_TIMER_CLOCKS; i++) {
+		dsp_clk_put_prepared(gpt_fck[i]);
+		dsp_clk_put_prepared(gpt_ick[i]);
+		gpt_fck[i] = NULL;
+		gpt_ick[i] = NULL;
+		if (gpt_regs[i])
+			iounmap(gpt_regs[i]);
+		gpt_regs[i] = NULL;
+	}
 
-	clk_unprepare(iva2_clk);
-	clk_put(iva2_clk);
-	clk_unprepare(ssi.sst_fck);
-	clk_put(ssi.sst_fck);
-	clk_unprepare(ssi.ssr_fck);
-	clk_put(ssi.ssr_fck);
-	clk_unprepare(ssi.ick);
-	clk_put(ssi.ick);
+	dsp_clk_put_prepared(iva2_clk);
+	iva2_clk = NULL;
 }
 
 /*
@@ -138,32 +164,28 @@ void dsp_clk_exit(void)
  */
 void dsp_clk_init(void)
 {
-	static struct platform_device dspbridge_device;
-	int i, id;
+	char name[16];
+	int i;
 
-	dspbridge_device.dev.bus = &platform_bus_type;
-
-	for (i = 0, id = 5; i < DM_TIMER_CLOCKS; i++, id++)
-		timer[i] = omap_dm_timer_request_specific(id);
-
-	iva2_clk = clk_get(&dspbridge_device.dev, "iva2_ck");
-	if (IS_ERR(iva2_clk))
-		dev_err(bridge, "failed to get iva2 clock %p\n", iva2_clk);
-	else
-		clk_prepare(iva2_clk);
-
-	ssi.sst_fck = clk_get(&dspbridge_device.dev, "ssi_sst_fck");
-	ssi.ssr_fck = clk_get(&dspbridge_device.dev, "ssi_ssr_fck");
-	ssi.ick = clk_get(&dspbridge_device.dev, "ssi_ick");
-
-	if (IS_ERR(ssi.sst_fck) || IS_ERR(ssi.ssr_fck) || IS_ERR(ssi.ick)) {
-		dev_err(bridge, "failed to get ssi: sst %p, ssr %p, ick %p\n",
-					ssi.sst_fck, ssi.ssr_fck, ssi.ick);
-	} else {
-		clk_prepare(ssi.sst_fck);
-		clk_prepare(ssi.ssr_fck);
-		clk_prepare(ssi.ick);
+	for (i = 0; i < DM_TIMER_CLOCKS; i++) {
+		snprintf(name, sizeof(name), "gpt%d_fck", i + 5);
+		gpt_fck[i] = dsp_clk_get_prepared(name);
+		snprintf(name, sizeof(name), "gpt%d_ick", i + 5);
+		gpt_ick[i] = dsp_clk_get_prepared(name);
+		gpt_regs[i] = ioremap(gpt_base[i], SZ_4K);
 	}
+
+	iva2_clk = dsp_clk_get_prepared("iva2_ck");
+}
+
+static void gpt_write(void __iomem *base, u32 reg, u32 val)
+{
+	int i;
+
+	writel(val, base + reg);
+	/* wait for a posted write to complete */
+	for (i = 0; i < 1000 && readl(base + GPT_TWPS); i++)
+		udelay(1);
 }
 
 /**
@@ -176,32 +198,46 @@ void dsp_clk_init(void)
  */
 void dsp_gpt_wait_overflow(short int clk_id, unsigned int load)
 {
-	struct omap_dm_timer *gpt = timer[clk_id - 1];
+	int i = clk_id - DSP_CLK_GPT5;
+	void __iomem *base;
 	unsigned long timeout;
+	u32 l;
 
-	if (!gpt)
+	if (i < 0 || i >= DM_TIMER_CLOCKS || !gpt_regs[i])
 		return;
+	base = gpt_regs[i];
+
+	if (clk_enable(gpt_ick[i]))
+		return;
+	if (clk_enable(gpt_fck[i]))
+		goto out_ick;
 
 	/* Enable overflow interrupt */
-	omap_dm_timer_set_int_enable(gpt, OMAP_TIMER_INT_OVERFLOW);
+	gpt_write(base, GPT_TIER, GPT_INT_OVERFLOW);
 
 	/*
 	 * Set counter value to overflow counter after
-	 * one tick and start timer.
+	 * one tick and start timer (one-shot).
 	 */
-	omap_dm_timer_set_load_start(gpt, 0, load);
+	l = (readl(base + GPT_TCLR) & ~GPT_TCLR_AR) | GPT_TCLR_ST;
+	gpt_write(base, GPT_TCRR, load);
+	gpt_write(base, GPT_TCLR, l);
 
 	/* Wait 80us for timer to overflow */
 	udelay(80);
 
-	timeout = msecs_to_jiffies(5);
+	timeout = jiffies + msecs_to_jiffies(5);
 	/* Check interrupt status and wait for interrupt */
-	while (!(omap_dm_timer_read_status(gpt) & OMAP_TIMER_INT_OVERFLOW)) {
-		if (time_is_after_jiffies(timeout)) {
+	while (!(readl(base + GPT_TISR) & GPT_INT_OVERFLOW)) {
+		if (time_after(jiffies, timeout)) {
 			pr_err("%s: GPTimer interrupt failed\n", __func__);
 			break;
 		}
 	}
+
+	clk_disable(gpt_fck[i]);
+out_ick:
+	clk_disable(gpt_ick[i]);
 }
 
 /*
@@ -221,33 +257,30 @@ int dsp_clk_enable(enum dsp_clk_id clk_id)
 
 	switch (get_clk_type(clk_id)) {
 	case IVA2_CLK:
-		clk_enable(iva2_clk);
+		status = clk_enable(iva2_clk);
 		break;
 	case GPT_CLK:
-		status = omap_dm_timer_start(timer[clk_id - 1]);
+		status = clk_enable(gpt_ick[clk_id - DSP_CLK_GPT5]);
+		if (status)
+			break;
+		status = clk_enable(gpt_fck[clk_id - DSP_CLK_GPT5]);
+		if (status)
+			clk_disable(gpt_ick[clk_id - DSP_CLK_GPT5]);
 		break;
-#ifdef CONFIG_SND_OMAP_SOC_MCBSP
-	case MCBSP_CLK:
-		omap_mcbsp_request(MCBSP_ID(clk_id));
-		omap2_mcbsp_set_clks_src(MCBSP_ID(clk_id), MCBSP_CLKS_PAD_SRC);
-		break;
-#endif
 	case WDT_CLK:
 		dev_err(bridge, "ERROR: DSP requested to enable WDT3 clk\n");
 		break;
+	case MCBSP_CLK:
 	case SSI_CLK:
-		clk_enable(ssi.sst_fck);
-		clk_enable(ssi.ssr_fck);
-		clk_enable(ssi.ick);
-
 		/*
-		 * The SSI module need to configured not to have the Forced
-		 * idle for master interface. If it is set to forced idle,
-		 * the SSI module is transitioning to standby thereby causing
-		 * the client in the DSP hang waiting for the SSI module to
-		 * be active after enabling the clocks
+		 * The McBSPs and the SSI belong to their own drivers now
+		 * (ASoC, the modem's omap_ssi); the old request/clock-source
+		 * and SSI SYSCONFIG overrides are gone, so these are not
+		 * handed to the DSP.
 		 */
-		ssi_clk_prepare(true);
+		dev_err(bridge, "DSP peripheral clock %d not supported\n",
+			clk_id);
+		status = -EPERM;
 		break;
 	default:
 		dev_err(bridge, "Invalid clock id for enable\n");
@@ -300,23 +333,11 @@ int dsp_clk_disable(enum dsp_clk_id clk_id)
 		clk_disable(iva2_clk);
 		break;
 	case GPT_CLK:
-		status = omap_dm_timer_stop(timer[clk_id - 1]);
+		clk_disable(gpt_fck[clk_id - DSP_CLK_GPT5]);
+		clk_disable(gpt_ick[clk_id - DSP_CLK_GPT5]);
 		break;
-#ifdef CONFIG_SND_OMAP_SOC_MCBSP
-	case MCBSP_CLK:
-		omap2_mcbsp_set_clks_src(MCBSP_ID(clk_id), MCBSP_CLKS_PRCM_SRC);
-		omap_mcbsp_free(MCBSP_ID(clk_id));
-		break;
-#endif
 	case WDT_CLK:
 		dev_err(bridge, "ERROR: DSP requested to disable WDT3 clk\n");
-		break;
-	case SSI_CLK:
-		ssi_clk_prepare(false);
-		ssi_clk_prepare(false);
-		clk_disable(ssi.sst_fck);
-		clk_disable(ssi.ssr_fck);
-		clk_disable(ssi.ick);
 		break;
 	default:
 		dev_err(bridge, "Invalid clock id for disable\n");
@@ -361,31 +382,3 @@ u32 dsp_clk_get_iva2_rate(void)
 
 	return clk_speed_khz;
 }
-
-void ssi_clk_prepare(bool FLAG)
-{
-	void __iomem *ssi_base;
-	unsigned int value;
-
-	ssi_base = ioremap(L4_34XX_BASE + OMAP_SSI_OFFSET, OMAP_SSI_SIZE);
-	if (!ssi_base) {
-		pr_err("%s: error, SSI not configured\n", __func__);
-		return;
-	}
-
-	if (FLAG) {
-		/* Set Autoidle, SIDLEMode to smart idle, and MIDLEmode to
-		 * no idle
-		 */
-		value = SSI_AUTOIDLE | SSI_SIDLE_SMARTIDLE | SSI_MIDLE_NOIDLE;
-	} else {
-		/* Set Autoidle, SIDLEMode to forced idle, and MIDLEmode to
-		 * forced idle
-		 */
-		value = SSI_AUTOIDLE;
-	}
-
-	__raw_writel(value, ssi_base + OMAP_SSI_SYSCONFIG_OFFSET);
-	iounmap(ssi_base);
-}
-
