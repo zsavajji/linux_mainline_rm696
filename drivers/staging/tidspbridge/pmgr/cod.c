@@ -93,11 +93,7 @@ static s32 cod_f_close(struct file *filp)
 
 static struct file *cod_f_open(const char *psz_file_name, const char *sz_mode)
 {
-	mm_segment_t fs;
 	struct file *filp;
-
-	fs = get_fs();
-	set_fs(get_ds());
 
 	/* ignore given mode and open file as read-only */
 	filp = filp_open(psz_file_name, O_RDONLY, 0);
@@ -105,30 +101,23 @@ static struct file *cod_f_open(const char *psz_file_name, const char *sz_mode)
 	if (IS_ERR(filp))
 		filp = NULL;
 
-	set_fs(fs);
-
 	return filp;
 }
 
-static s32 cod_f_read(void __user *pbuffer, s32 size, s32 count,
-		      struct file *filp)
+static s32 cod_f_read(void *pbuffer, s32 size, s32 count, struct file *filp)
 {
 	/* check for valid file handle */
 	if (!filp)
 		return -EFAULT;
 
 	if ((size > 0) && (count > 0) && pbuffer) {
-		u32 dw_bytes_read;
-		mm_segment_t fs;
+		ssize_t dw_bytes_read;
 
-		/* read from file */
-		fs = get_fs();
-		set_fs(get_ds());
-		dw_bytes_read = filp->f_op->read(filp, pbuffer, size * count,
-						 &(filp->f_pos));
-		set_fs(fs);
+		/* read from file into the loader's kernel buffer */
+		dw_bytes_read = kernel_read(filp, pbuffer, size * count,
+					    &filp->f_pos);
 
-		if (!dw_bytes_read)
+		if (dw_bytes_read <= 0)
 			return -EBADF;
 
 		return dw_bytes_read / size;
@@ -146,7 +135,7 @@ static s32 cod_f_seek(struct file *filp, s32 offset, s32 origin)
 		return -EFAULT;
 
 	/* based on the origin flag, move the internal pointer */
-	dw_cur_pos = filp->f_op->llseek(filp, offset, origin);
+	dw_cur_pos = vfs_llseek(filp, offset, origin);
 
 	if ((s32) dw_cur_pos < 0)
 		return -EPERM;
@@ -163,7 +152,7 @@ static s32 cod_f_tell(struct file *filp)
 		return -EFAULT;
 
 	/* Get current position */
-	dw_cur_pos = filp->f_op->llseek(filp, 0, SEEK_CUR);
+	dw_cur_pos = vfs_llseek(filp, 0, SEEK_CUR);
 
 	if ((s32) dw_cur_pos < 0)
 		return -EPERM;
