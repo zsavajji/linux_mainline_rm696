@@ -1458,7 +1458,8 @@ static void dsicm_split_record(struct panel_drv_data *ddata, int half)
 	u32 us = ktime_us_delta(ktime_get(), ddata->split_t0);
 
 	ddata->split_us[half] = us;
-	ddata->split_max[half] = max(ddata->split_max[half], us);
+	/* a peak that fades by 1/32 a frame: one slow half (at boot) mustn't stop late starts for good */
+	ddata->split_max[half] = max(ddata->split_max[half] - ddata->split_max[half] / 32, us);
 }
 
 static void dsicm_split_done2(int err, void *data)
