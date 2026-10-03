@@ -79,6 +79,29 @@
 #define DIRECT		0
 #define IDLE		1
 
+/*
+ * As Nokia's driver: after the DSP's own hibernation the IVA2 powers up with its MMU reset and
+ * the DSP boots from the boot address, which must then be PWRM's restore code, by its physical
+ * address (DSP/BIOS restores its MMU and context from there). Set once the DSP has started.
+ */
+static int set_warmboot_addr(struct bridge_dev_context *dev_context)
+{
+	struct omap_dsp_platform_data *pdata = omap_dspbridge_dev->dev.platform_data;
+	u32 wbbase = 0, dynextbase = 0, extbase = 0, extend = 0;
+
+	dev_get_symbol(dev_context->dev_obj, "_PWRM_restore", &wbbase);
+	dev_get_symbol(dev_context->dev_obj, DYNEXTBASE, &dynextbase);
+	dev_get_symbol(dev_context->dev_obj, EXTBASE, &extbase);
+	dev_get_symbol(dev_context->dev_obj, EXTEND, &extend);
+	if (!wbbase || wbbase < extbase || wbbase > extend)
+		return -EINVAL;
+
+	pdata->set_bootmode(DIRECT);
+	pdata->set_bootaddr((dev_context->resources->mem_phys[1] + wbbase - dynextbase) &
+			    OMAP3_IVA2_BOOTADDR_MASK);
+	return 0;
+}
+
 /* Forward Declarations: */
 static int bridge_brd_monitor(struct bridge_dev_context *dev_ctxt);
 static int bridge_brd_read(struct bridge_dev_context *dev_ctxt,
@@ -627,6 +650,9 @@ static int bridge_brd_start(struct bridge_dev_context *dev_ctxt,
 			 * completion of OPP table update to DSP
 			 */
 			__raw_writel(0XCAFECAFE, sync_addr);
+
+			if (set_warmboot_addr(dev_context))
+				dev_err(bridge, "no warm boot address, the DSP can't hibernate\n");
 
 			/* update board state */
 			dev_context->brd_state = BRD_RUNNING;
