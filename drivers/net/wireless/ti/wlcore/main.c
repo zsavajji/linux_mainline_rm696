@@ -4705,15 +4705,11 @@ static void wl1271_op_bss_info_changed(struct ieee80211_hw *hw,
 	if (ret < 0)
 		goto out;
 
+	/* unset (INT_MIN, before a channel context) or refused: keep the last level and go on */
 	if ((changed & BSS_CHANGED_TXPOWER) &&
-	    bss_conf->txpower != wlvif->power_level) {
-
-		ret = wl1271_acx_tx_power(wl, wlvif, bss_conf->txpower);
-		if (ret < 0)
-			goto out;
-
+	    bss_conf->txpower != wlvif->power_level &&
+	    !wl1271_acx_tx_power(wl, wlvif, bss_conf->txpower))
 		wlvif->power_level = bss_conf->txpower;
-	}
 
 	if (is_ap)
 		wl1271_bss_info_changed_ap(wl, vif, bss_conf, changed);
