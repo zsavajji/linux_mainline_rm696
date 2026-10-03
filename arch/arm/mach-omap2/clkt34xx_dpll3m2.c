@@ -138,10 +138,12 @@ out:
  * OPP, 300 MHz; the user's phone sets a 600 MHz floor) holds it high (cpufreq), and so do
  * omap3_l3_hold() callers (enum omap3_l3_user): the SGX from before it gets its clock until after it
  * lost it, so its clock (CORE/2) never changes while it runs; the display, USB and WLAN as stock asked
- * for bus throughput. Raised at once, lowered l3_lower_delay_ms after the last hold went (1 s; in
- * /sys/module/clkt34xx_dpll3m2/parameters, for tests).
+ * for bus throughput. Raised at once, lowered l3_lower_delay_ms after the last hold went (100 ms; in
+ * /sys/module/clkt34xx_dpll3m2/parameters). Measured in settled standby (2026-10-03): 1000 ms kept L3
+ * at OPP50 39% of the time with 39 switches a minute, 500 ms 61%/43, 250 ms 66%/49, 100 ms 77%/53,
+ * 0 ms (stock) 79%/60.
  */
-static unsigned int l3_lower_delay_ms = 1000;
+static unsigned int l3_lower_delay_ms = 100;
 module_param(l3_lower_delay_ms, uint, 0644);
 
 static struct clk *l3_m2;
