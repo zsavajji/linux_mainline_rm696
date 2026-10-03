@@ -427,6 +427,25 @@ void dsp_clk_wakeup_event_ctrl(u32 clock_id, bool enable)
 	if (!resources)
 		return;
 
+	/*
+	 * Mainline's hwmod code clears the wakeup enable of modules no Linux driver uses
+	 * (PM_WKEN_PER: GPT2-9 0, Nokia's kernel left their reset value, enabled): a DSP timer
+	 * then can't wake the IVA2 from its sleep between ticks. Enable the wakeup with the
+	 * routing (same bits as the GRPSEL masks)
+	 */
+	{
+		u32 wken = clock_id == BPWR_GP_TIMER5 ? OMAP3430_GRPSEL_GPT5_MASK :
+			   clock_id == BPWR_GP_TIMER6 ? OMAP3430_GRPSEL_GPT6_MASK :
+			   clock_id == BPWR_GP_TIMER7 ? OMAP3430_GRPSEL_GPT7_MASK :
+			   clock_id == BPWR_GP_TIMER8 ? OMAP3430_GRPSEL_GPT8_MASK : 0;
+		u32 v;
+
+		if (wken) {
+			v = readl(resources->per_pm_base + 0xA0);	/* PM_WKEN_PER */
+			writel(enable ? v | wken : v & ~wken, resources->per_pm_base + 0xA0);
+		}
+	}
+
 	switch (clock_id) {
 	case BPWR_GP_TIMER5:
 		iva2_grpsel = readl(resources->per_pm_base + 0xA8);
