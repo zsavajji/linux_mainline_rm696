@@ -812,12 +812,38 @@ err_out:
  *  Purpose:
  *     Flush cache
  */
+/*
+ * gst-dsp flushes and invalidates the small parameter blocks around every exchange with the DSP
+ * and expects the cache operation done when the call returns: Nokia's driver did it right there
+ * on the user range, holding only mmap_sem (its proc_memory_sync()). The v3.16 begin-DMA path
+ * waited for proc_lock, which every map holds for milliseconds (avg 620 us, stock's 10 us):
+ * take the range's pages and clean and/or invalidate exactly the range.
+ */
+static int proc_memory_sync(void *pmpu_addr, u32 size, enum dma_data_direction dir)
+{
+	unsigned long a = (unsigned long)pmpu_addr, end = a + size;
+	struct page *page;
+	dma_addr_t h;
+	u32 len;
+
+	while (a < end) {
+		len = min_t(unsigned long, PAGE_SIZE - offset_in_page(a), end - a);
+		if (get_user_pages_fast(a & PAGE_MASK, 1, 0, &page) != 1)
+			return -EFAULT;
+		h = dma_map_page(bridge, page, offset_in_page(a), len, dir);
+		if (!dma_mapping_error(bridge, h))
+			dma_unmap_page(bridge, h, len, dir);
+		put_page(page);
+		a += len;
+	}
+	return 0;
+}
+
 int proc_flush_memory(void *hprocessor, void *pmpu_addr,
 			     u32 ul_size, u32 ul_flags)
 {
-	enum dma_data_direction dir = DMA_BIDIRECTIONAL;
-
-	return proc_begin_dma(hprocessor, pmpu_addr, ul_size, dir);
+	/* write back and invalidate, as Nokia's PROC_WRITEBACK_INVALIDATE_MEM */
+	return proc_memory_sync(pmpu_addr, ul_size, DMA_BIDIRECTIONAL);
 }
 
 /*
@@ -827,9 +853,7 @@ int proc_flush_memory(void *hprocessor, void *pmpu_addr,
  */
 int proc_invalidate_memory(void *hprocessor, void *pmpu_addr, u32 size)
 {
-	enum dma_data_direction dir = DMA_FROM_DEVICE;
-
-	return proc_begin_dma(hprocessor, pmpu_addr, size, dir);
+	return proc_memory_sync(pmpu_addr, size, DMA_FROM_DEVICE);
 }
 
 /*
