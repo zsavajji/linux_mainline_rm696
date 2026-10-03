@@ -17,6 +17,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/sched.h>
 #include <linux/sched/clock.h>
 #include <linux/clk.h>
@@ -194,6 +195,14 @@ static int __init pwrdms_setup(struct powerdomain *pwrdm, void *dir)
 	return 0;
 }
 
+/*
+ * Nokia's N9 kernel had these too. Harmattan's /sbin/read_cfg.awk writes them from /etc/pmconfig at
+ * every boot and stops at the first one missing, before its SmartReflex, governor and frequency lines.
+ * Mainline behaves as if they were all allowed (CORE may go off with enable_off_mode, idle sleeps,
+ * voltages go down in idle): kept for it, without effect
+ */
+static u32 disable_core_off, sleep_while_idle = 1, voltage_off_while_idle = 1;
+
 static int option_get(void *data, u64 *val)
 {
 	u32 *option = data;
@@ -210,6 +219,16 @@ static int option_set(void *data, u64 val)
 	*option = val;
 
 	if (option == &enable_off_mode) {
+		/*
+		 * The N9 is an HS device: OFF mode needs its secure RAM saved as Nokia's kernel did
+		 * (0xc040 bytes, again whenever dirty), which isn't done yet. Its pmconfig asks for
+		 * OFF mode at every boot: accept the write, don't apply it
+		 */
+		if (val && of_machine_is_compatible("nokia,omap3-n9")) {
+			pr_warn_once("pm_debug: OFF mode isn't available on the N9 yet\n");
+			*option = 0;
+			return 0;
+		}
 		if (cpu_is_omap34xx())
 			omap3_pm_off_mode_enable(val);
 	}
@@ -235,6 +254,12 @@ static int __init pm_dbg_init(void)
 
 	debugfs_create_file("enable_off_mode", S_IRUGO | S_IWUSR, d,
 			    &enable_off_mode, &pm_dbg_option_fops);
+	debugfs_create_file("disable_core_off", S_IRUGO | S_IWUSR, d,
+			    &disable_core_off, &pm_dbg_option_fops);
+	debugfs_create_file("sleep_while_idle", S_IRUGO | S_IWUSR, d,
+			    &sleep_while_idle, &pm_dbg_option_fops);
+	debugfs_create_file("voltage_off_while_idle", S_IRUGO | S_IWUSR, d,
+			    &voltage_off_while_idle, &pm_dbg_option_fops);
 	pm_dbg_init_done = 1;
 
 	return 0;
