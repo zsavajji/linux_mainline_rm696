@@ -926,6 +926,9 @@ static void wl12xx_read_fwlog_panic(struct wl1271 *wl)
 			end_of_log = wlcore_event_fw_logger(wl);
 		}
 	} while (end_of_log != 0);
+
+	/* the recovery work holds its own */
+	pm_runtime_put_noidle(wl->dev);
 }
 
 static void wlcore_save_freed_pkts(struct wl1271 *wl, struct wl12xx_vif *wlvif,
@@ -2660,6 +2663,8 @@ static int wl1271_op_add_interface(struct ieee80211_hw *hw,
 	if (wl12xx_need_fw_change(wl, vif_count, true)) {
 		wl12xx_force_active_psm(wl);
 		set_bit(WL1271_FLAG_INTENDED_FW_RECOVERY, &wl->flags);
+		/* the recovery work takes its own */
+		pm_runtime_put_noidle(wl->dev);
 		mutex_unlock(&wl->mutex);
 		wl1271_recovery_work(&wl->recovery_work);
 		return 0;
