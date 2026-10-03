@@ -21,6 +21,7 @@
 #include <linux/io.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
 #include <linux/power/smartreflex.h>
@@ -35,6 +36,8 @@ static LIST_HEAD(sr_list);
 
 static struct omap_sr_class_data *sr_class;
 static struct dentry		*sr_dbg_dir;
+/* autocomp changes vs voltage changes (omap_sr_scale) */
+static DEFINE_MUTEX(sr_lock);
 
 static inline void sr_write_reg(struct omap_sr *sr, unsigned offset, u32 value)
 {
@@ -166,8 +169,10 @@ static void sr_start_vddautocomp(struct omap_sr *sr)
 		return;
 	}
 
-	if (!sr_class->enable(sr))
+	mutex_lock(&sr_lock);
+	if (!sr->autocomp_active && !sr_class->enable(sr))
 		sr->autocomp_active = true;
+	mutex_unlock(&sr_lock);
 }
 
 static void sr_stop_vddautocomp(struct omap_sr *sr)
@@ -179,10 +184,12 @@ static void sr_stop_vddautocomp(struct omap_sr *sr)
 		return;
 	}
 
-	if (sr->autocomp_active) {
+	mutex_lock(&sr_lock);
+	/* not running if its last start failed: its registers are unclocked then */
+	if (sr->enabled)
 		sr_class->disable(sr, 1);
-		sr->autocomp_active = false;
-	}
+	sr->autocomp_active = false;
+	mutex_unlock(&sr_lock);
 }
 
 /*
@@ -673,98 +680,35 @@ int sr_register_class(struct omap_sr_class_data *class_data)
 }
 
 /**
- * omap_sr_enable() -  API to enable SR clocks and to call into the
- *			registered smartreflex class enable API.
- * @voltdm:	VDD pointer to which the SR module to be configured belongs to.
+ * omap_sr_scale() - change a voltage domain's voltage with its SmartReflex stopped
+ * @voltdm:	the voltage domain
+ * @volt:	its new nominal voltage
+ * @scale:	the change (voltage.c)
  *
- * This API is to be called from the kernel in order to enable
- * a particular smartreflex module. This API will do the initial
- * configurations to turn on the smartreflex module and in turn call
- * into the registered smartreflex class enable API.
+ * SmartReflex steers the voltage processor's voltage to the nTarget of the voltage it was
+ * started at: it must not run while the VP is forced to another voltage, and has to restart
+ * with the new voltage's nTarget. Nokia's N9 kernel stopped it around each OPP change the
+ * same way (resource34xx.c, program_opp()). Autocomp changes wait meanwhile. May sleep; with
+ * autocomp off this is a mutex and a two-entry list walk.
  */
-void omap_sr_enable(struct voltagedomain *voltdm)
+int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
+		  int (*scale)(struct voltagedomain *voltdm, unsigned long volt))
 {
-	struct omap_sr *sr = _sr_lookup(voltdm);
+	struct omap_sr *sr;
+	int ret;
 
-	if (IS_ERR(sr)) {
-		pr_warn("%s: omap_sr struct for voltdm not found\n", __func__);
-		return;
-	}
+	mutex_lock(&sr_lock);
+	sr = _sr_lookup(voltdm);
+	if (IS_ERR(sr) || !sr->autocomp_active)
+		sr = NULL;
+	if (sr && sr->enabled)
+		sr_class->disable(sr, 0);
+	ret = scale(voltdm, volt);
+	if (sr)
+		sr_class->enable(sr);
+	mutex_unlock(&sr_lock);
 
-	if (!sr->autocomp_active)
-		return;
-
-	if (!sr_class || !(sr_class->enable) || !(sr_class->configure)) {
-		dev_warn(&sr->pdev->dev, "%s: smartreflex class driver not registered\n",
-			 __func__);
-		return;
-	}
-
-	sr_class->enable(sr);
-}
-
-/**
- * omap_sr_disable() - API to disable SR without resetting the voltage
- *			processor voltage
- * @voltdm:	VDD pointer to which the SR module to be configured belongs to.
- *
- * This API is to be called from the kernel in order to disable
- * a particular smartreflex module. This API will in turn call
- * into the registered smartreflex class disable API. This API will tell
- * the smartreflex class disable not to reset the VP voltage after
- * disabling smartreflex.
- */
-void omap_sr_disable(struct voltagedomain *voltdm)
-{
-	struct omap_sr *sr = _sr_lookup(voltdm);
-
-	if (IS_ERR(sr)) {
-		pr_warn("%s: omap_sr struct for voltdm not found\n", __func__);
-		return;
-	}
-
-	if (!sr->autocomp_active)
-		return;
-
-	if (!sr_class || !(sr_class->disable)) {
-		dev_warn(&sr->pdev->dev, "%s: smartreflex class driver not registered\n",
-			 __func__);
-		return;
-	}
-
-	sr_class->disable(sr, 0);
-}
-
-/**
- * omap_sr_disable_reset_volt() - API to disable SR and reset the
- *				voltage processor voltage
- * @voltdm:	VDD pointer to which the SR module to be configured belongs to.
- *
- * This API is to be called from the kernel in order to disable
- * a particular smartreflex module. This API will in turn call
- * into the registered smartreflex class disable API. This API will tell
- * the smartreflex class disable to reset the VP voltage after
- * disabling smartreflex.
- */
-void omap_sr_disable_reset_volt(struct voltagedomain *voltdm)
-{
-	struct omap_sr *sr = _sr_lookup(voltdm);
-
-	if (IS_ERR(sr)) {
-		pr_warn("%s: omap_sr struct for voltdm not found\n", __func__);
-		return;
-	}
-
-	if (!sr->autocomp_active)
-		return;
-
-	if (!sr_class || !(sr_class->disable)) {
-		dev_warn(&sr->pdev->dev, "%s: smartreflex class driver not registered\n",
-			 __func__);
-		return;
-	}
-
-	sr_class->disable(sr, 1);
+	return ret;
 }
 
 /* PM Debug FS entries to enable and disable smartreflex. */

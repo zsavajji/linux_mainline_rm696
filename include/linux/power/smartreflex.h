@@ -297,10 +297,9 @@ extern struct omap_sr_data omap_sr_pdata[OMAP_SR_NR];
 
 #ifdef CONFIG_POWER_AVS_OMAP
 
-/* Smartreflex module enable/disable interface */
-void omap_sr_enable(struct voltagedomain *voltdm);
-void omap_sr_disable(struct voltagedomain *voltdm);
-void omap_sr_disable_reset_volt(struct voltagedomain *voltdm);
+/* Voltage changes stop and restart SmartReflex */
+int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
+		  int (*scale)(struct voltagedomain *voltdm, unsigned long volt));
 
 /* Smartreflex driver hooks to be called from Smartreflex class driver */
 int sr_enable(struct omap_sr *sr, unsigned long volt);
@@ -312,9 +311,10 @@ int sr_configure_minmax(struct omap_sr *sr);
 /* API to register the smartreflex class driver with the smartreflex driver */
 int sr_register_class(struct omap_sr_class_data *class_data);
 #else
-static inline void omap_sr_enable(struct voltagedomain *voltdm) {}
-static inline void omap_sr_disable(struct voltagedomain *voltdm) {}
-static inline void omap_sr_disable_reset_volt(
-		struct voltagedomain *voltdm) {}
+static inline int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
+				int (*scale)(struct voltagedomain *voltdm, unsigned long volt))
+{
+	return scale(voltdm, volt);
+}
 #endif
 #endif

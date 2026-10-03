@@ -23,6 +23,7 @@
 #include <linux/debugfs.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
+#include <linux/power/smartreflex.h>
 
 #include "common.h"
 
@@ -59,16 +60,8 @@ unsigned long voltdm_get_voltage(struct voltagedomain *voltdm)
 	return voltdm->nominal_volt;
 }
 
-/**
- * voltdm_scale() - API to scale voltage of a particular voltage domain.
- * @voltdm: pointer to the voltage domain which is to be scaled.
- * @target_volt: The target voltage of the voltage domain
- *
- * This API should be called by the kernel to do the voltage scaling
- * for a particular voltage domain during DVFS.
- */
-int voltdm_scale(struct voltagedomain *voltdm,
-		 unsigned long target_volt)
+static int _voltdm_scale(struct voltagedomain *voltdm,
+			 unsigned long target_volt)
 {
 	int ret, i;
 	unsigned long volt = 0;
@@ -112,6 +105,22 @@ int voltdm_scale(struct voltagedomain *voltdm,
 }
 
 /**
+ * voltdm_scale() - API to scale voltage of a particular voltage domain.
+ * @voltdm: pointer to the voltage domain which is to be scaled.
+ * @target_volt: The target voltage of the voltage domain
+ *
+ * This API should be called by the kernel to do the voltage scaling
+ * for a particular voltage domain during DVFS. SmartReflex running on
+ * the domain stops for the change and restarts at the new voltage.
+ * May sleep.
+ */
+int voltdm_scale(struct voltagedomain *voltdm,
+		 unsigned long target_volt)
+{
+	return omap_sr_scale(voltdm, target_volt, _voltdm_scale);
+}
+
+/**
  * voltdm_reset() - Resets the voltage of a particular voltage domain
  *		    to that of the current OPP.
  * @voltdm: pointer to the voltage domain whose voltage is to be reset.
@@ -136,7 +145,8 @@ void voltdm_reset(struct voltagedomain *voltdm)
 		return;
 	}
 
-	voltdm_scale(voltdm, target_volt);
+	/* SmartReflex's own, from its class driver (it is stopped already): not through it */
+	_voltdm_scale(voltdm, target_volt);
 }
 
 /**
