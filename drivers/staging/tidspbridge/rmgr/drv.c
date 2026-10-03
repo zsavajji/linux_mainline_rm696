@@ -792,7 +792,7 @@ void *mem_alloc_phys_mem(u32 byte_size, u32 align_mask,
 			va_mem = mem_ext_phys_mem_alloc(byte_size, align_mask,
 							(u32 *) &pa_mem);
 		} else
-			va_mem = dma_alloc_coherent(NULL, byte_size, &pa_mem,
+			va_mem = dma_alloc_coherent(bridge, byte_size, &pa_mem,
 								GFP_KERNEL);
 		if (va_mem == NULL)
 			*physical_address = 0;
@@ -811,6 +811,6 @@ void mem_free_phys_mem(void *virtual_address, u32 physical_address,
 		       u32 byte_size)
 {
 	if (!ext_phys_mem_pool_enabled)
-		dma_free_coherent(NULL, byte_size, virtual_address,
+		dma_free_coherent(bridge, byte_size, virtual_address,
 				  physical_address);
 }

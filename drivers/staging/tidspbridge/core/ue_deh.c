@@ -86,6 +86,7 @@ int bridge_deh_create(struct deh_mgr **ret_deh,
 {
 	int status;
 	struct deh_mgr *deh;
+	int irq;
 	struct bridge_dev_context *hbridge_context = NULL;
 
 	/*  Message manager will be created when a file is loaded, since
@@ -114,11 +115,17 @@ int bridge_deh_create(struct deh_mgr **ret_deh,
 	/* Fill in context structure */
 	deh->bridge_context = hbridge_context;
 
-	/* Install ISR function for DSP MMU fault */
-	status = request_irq(INT_DSP_MMU_IRQ, mmu_fault_isr, 0,
+	/* Install ISR function for DSP MMU fault (DT interrupt "mmu") */
+	irq = platform_get_irq_byname(omap_dspbridge_dev, "mmu");
+	if (irq < 0) {
+		status = irq;
+		goto err;
+	}
+	status = request_irq(irq, mmu_fault_isr, 0,
 			"DspBridge\tiommu fault", deh);
 	if (status < 0)
 		goto err;
+	deh->irq = irq;
 
 	*ret_deh = deh;
 	return 0;
@@ -140,7 +147,8 @@ int bridge_deh_destroy(struct deh_mgr *deh)
 		kfree(deh->ntfy_obj);
 	}
 	/* Disable DSP MMU fault */
-	free_irq(INT_DSP_MMU_IRQ, deh);
+	if (deh->irq)
+		free_irq(deh->irq, deh);
 
 	/* Free DPC object */
 	tasklet_kill(&deh->dpc_tasklet);

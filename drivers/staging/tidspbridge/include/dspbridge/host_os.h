@@ -46,9 +46,6 @@
 #include <asm/cacheflush.h>
 #include <linux/dma-mapping.h>
 
-/* TODO -- Remove, once omap-iommu is used */
-#define INT_DSP_MMU_IRQ        (28 + NR_IRQS)
-
 #define PRCM_VDD1 1
 
 extern struct platform_device *omap_dspbridge_dev;

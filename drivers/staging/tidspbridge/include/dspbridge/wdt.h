@@ -29,6 +29,7 @@
  * @wdt3_tasklet	tasklet to manage wdt event
  * @fclk		handle to wdt3 functional clock
  * @iclk		handle to wdt3 interface clock
+ * @irq		wdt3 interrupt (DT interrupt "wdt"), 0 if not requested
  *
  * This struct is used in the function to manage wdt3.
  */
@@ -39,6 +40,7 @@ struct dsp_wdt_setting {
 	struct tasklet_struct wdt3_tasklet;
 	struct clk *fclk;
 	struct clk *iclk;
+	int irq;
 };
 
 /**

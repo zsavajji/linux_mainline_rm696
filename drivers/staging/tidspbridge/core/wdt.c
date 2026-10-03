@@ -26,7 +26,6 @@
 
 
 #define OMAP34XX_WDT3_BASE	(0x49000000 + 0x30000)
-#define INT_34XX_WDT3_IRQ	(36 + NR_IRQS)
 
 static struct dsp_wdt_setting dsp_wdt;
 
@@ -52,6 +51,7 @@ irqreturn_t dsp_wdt_isr(int irq, void *data)
 int dsp_wdt_init(void)
 {
 	int ret = 0;
+	int irq;
 
 	dsp_wdt.sm_wdt = NULL;
 	dsp_wdt.reg_base = ioremap(OMAP34XX_WDT3_BASE, SZ_4K);
@@ -76,13 +76,18 @@ int dsp_wdt_init(void)
 	} else
 		ret = -EFAULT;
 
-	if (!ret)
-		ret = request_irq(INT_34XX_WDT3_IRQ, dsp_wdt_isr, 0,
-							"dsp_wdt", &dsp_wdt);
+	if (!ret) {
+		irq = platform_get_irq_byname(omap_dspbridge_dev, "wdt");
+		if (irq < 0)
+			ret = irq;
+	}
 
-	/* Disable at this moment, it will be enabled when DSP starts */
+	/* Disabled at this moment, it will be enabled when DSP starts */
 	if (!ret)
-		disable_irq(INT_34XX_WDT3_IRQ);
+		ret = request_irq(irq, dsp_wdt_isr, IRQF_NO_AUTOEN,
+				  "dsp_wdt", &dsp_wdt);
+	if (!ret)
+		dsp_wdt.irq = irq;
 
 	return ret;
 }
@@ -96,7 +101,9 @@ void dsp_wdt_sm_set(void *data)
 
 void dsp_wdt_exit(void)
 {
-	free_irq(INT_34XX_WDT3_IRQ, &dsp_wdt);
+	if (dsp_wdt.irq)
+		free_irq(dsp_wdt.irq, &dsp_wdt);
+	dsp_wdt.irq = 0;
 	tasklet_kill(&dsp_wdt.wdt3_tasklet);
 
 	if (dsp_wdt.fclk) {
@@ -133,9 +140,9 @@ void dsp_wdt_enable(bool enable)
 		dsp_wdt.sm_wdt->wdt_setclocks = 1;
 		tmp = __raw_readl(dsp_wdt.reg_base + OMAP3_WDT3_ISR_OFFSET);
 		__raw_writel(tmp, dsp_wdt.reg_base + OMAP3_WDT3_ISR_OFFSET);
-		enable_irq(INT_34XX_WDT3_IRQ);
+		enable_irq(dsp_wdt.irq);
 	} else {
-		disable_irq(INT_34XX_WDT3_IRQ);
+		disable_irq(dsp_wdt.irq);
 		dsp_wdt.sm_wdt->wdt_setclocks = 0;
 		clk_disable(dsp_wdt.iclk);
 		clk_disable(dsp_wdt.fclk);

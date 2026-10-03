@@ -30,6 +30,9 @@ struct deh_mgr {
 
 	/* MMU Fault DPC */
 	struct tasklet_struct dpc_tasklet;
+
+	/* IVA2 MMU fault interrupt, 0 if not requested */
+	int irq;
 };
 
 #endif /* _DEH_ */

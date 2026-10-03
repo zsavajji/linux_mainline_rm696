@@ -25,6 +25,8 @@
 #include <linux/device.h>
 #include <linux/moduleparam.h>
 #include <linux/cdev.h>
+#include <linux/of.h>
+#include <linux/of_reserved_mem.h>
 
 /*  ----------------------------------- DSP/BIOS Bridge */
 #include <dspbridge/dbdefs.h>
@@ -62,6 +64,8 @@ static struct cdev bridge_cdev;
 static struct class *bridge_class;
 
 static u32 driver_context;
+/* Shared memory pool (DT memory-region): SHM, DSP MMU tables; mmap()able */
+static struct resource dsp_pool;
 static s32 driver_major;
 static char *base_img;
 static s32 shm_size = 0x500000;	/* 5 MB */
@@ -259,8 +263,6 @@ static int bridge_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	unsigned long base_pgoff;
 	int status;
-	struct omap_dsp_platform_data *pdata =
-					omap_dspbridge_dev->dev.platform_data;
 
 	/* VM_IO | VM_DONTEXPAND | VM_DONTDUMP are set by remap_pfn_range() */
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
@@ -280,16 +282,15 @@ static int bridge_mmap(struct file *filp, struct vm_area_struct *vma)
 	 * expects, but restore the original value once the mapping has been
 	 * created.
 	 */
-	base_pgoff = pdata->phys_mempool_base >> PAGE_SHIFT;
+	base_pgoff = dsp_pool.start >> PAGE_SHIFT;
 
 	if (vma->vm_pgoff < base_pgoff)
 		return -EINVAL;
 
 	vma->vm_pgoff -= base_pgoff;
 
-	status = vm_iomap_memory(vma,
-				 pdata->phys_mempool_base,
-				 pdata->phys_mempool_size);
+	status = vm_iomap_memory(vma, dsp_pool.start,
+				 resource_size(&dsp_pool));
 
 	/* Restore the original value of vma->vm_pgoff */
 	vma->vm_pgoff += base_pgoff;
@@ -329,8 +330,6 @@ const struct omap_opp vdd1_rate_table_bridge[] = {
 };
 #endif
 #endif
-
-struct omap_dsp_platform_data *omap_dspbridge_pdata;
 
 u32 vdd1_dsp_freq[6][4] = {
 	{0, 0, 0, 0},
@@ -401,9 +400,10 @@ static struct notifier_block iva_clk_notifier = {
  */
 static int omap3_bridge_startup(struct platform_device *pdev)
 {
+#ifdef CONFIG_TIDSPBRIDGE_DVFS
 	struct omap_dsp_platform_data *pdata = pdev->dev.platform_data;
+#endif
 	struct drv_data *drv_datap = NULL;
-	u32 phys_membase, phys_memsize;
 	int err;
 
 #ifdef CONFIG_TIDSPBRIDGE_RECOVERY
@@ -457,10 +457,24 @@ static int omap3_bridge_startup(struct platform_device *pdev)
 	}
 	dev_dbg(bridge, "%s: requested shm_size = 0x%x\n", __func__, shm_size);
 
-	phys_membase = pdata->phys_mempool_base;
-	phys_memsize = pdata->phys_mempool_size;
-	if (phys_membase > 0 && phys_memsize > 0)
-		mem_ext_phys_pool_init(phys_membase, phys_memsize);
+	/*
+	 * The pool must be a no-map reserved-memory region: the driver
+	 * ioremap()s it uncached and userspace mmap()s the CMM segments in it.
+	 */
+	err = of_reserved_mem_region_to_resource(pdev->dev.of_node, 0,
+						 &dsp_pool);
+	if (err) {
+		dev_err(&pdev->dev, "no memory-region for the shared memory pool: %d\n",
+			err);
+		goto err3;
+	}
+	if (resource_size(&dsp_pool) < shm_size) {
+		dev_err(&pdev->dev, "memory-region %pR smaller than shm_size 0x%x\n",
+			&dsp_pool, shm_size);
+		err = -EINVAL;
+		goto err3;
+	}
+	mem_ext_phys_pool_init(dsp_pool.start, resource_size(&dsp_pool));
 
 	if (tc_wordswapon)
 		dev_dbg(bridge, "%s: TC Word Swap is enabled\n", __func__);
@@ -491,11 +505,21 @@ err1:
 
 static int omap34_xx_bridge_probe(struct platform_device *pdev)
 {
+	struct omap_dsp_platform_data *pdata = dev_get_platdata(&pdev->dev);
 	int err;
 	dev_t dev = 0;
 #ifdef CONFIG_TIDSPBRIDGE_DVFS
 	int i = 0;
 #endif
+
+	/* IVA2 PRCM and boot control come from mach-omap2 (OF auxdata) */
+	if (!pdata || !pdata->dsp_prm_read || !pdata->dsp_prm_write ||
+	    !pdata->dsp_prm_rmw_bits || !pdata->dsp_cm_read ||
+	    !pdata->dsp_cm_write || !pdata->dsp_cm_rmw_bits ||
+	    !pdata->set_bootaddr || !pdata->set_bootmode) {
+		dev_err(&pdev->dev, "missing IVA2 platform data\n");
+		return -ENODEV;
+	}
 
 	omap_dspbridge_dev = pdev;
 
@@ -617,9 +641,20 @@ static int bridge_resume(struct platform_device *pdev)
 }
 #endif
 
+/*
+ * No MODULE_DEVICE_TABLE, as with Nokia's module: Harmattan loads it itself
+ * (group-hal job; /etc/modprobe.d/bridgedriver: shm_size=0x500000
+ * base_img=/lib/dsp/baseimage.dof).
+ */
+static const struct of_device_id bridge_of_match[] = {
+	{ .compatible = "ti,omap3-dspbridge" },
+	{ }
+};
+
 static struct platform_driver bridge_driver = {
 	.driver = {
 		   .name = "omap-dsp",
+		   .of_match_table = bridge_of_match,
 		   },
 	.probe = omap34_xx_bridge_probe,
 	.remove = omap34_xx_bridge_remove,

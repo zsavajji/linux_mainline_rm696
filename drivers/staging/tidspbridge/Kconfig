@@ -27,14 +27,6 @@ config TIDSPBRIDGE_DVFS
 	  performance and power consumption to the current processing
 	  requirements.
 
-config TIDSPBRIDGE_MEMPOOL_SIZE
-	hex "Physical memory pool size (Byte)"
-	depends on TIDSPBRIDGE
-	default 0x600000
-	help
-	  Allocate specified size of memory at booting time to avoid allocation
-	  failure under heavy memory fragmentation after some use time.
-
 config TIDSPBRIDGE_RECOVERY
 	bool "Recovery Support"
 	depends on TIDSPBRIDGE
