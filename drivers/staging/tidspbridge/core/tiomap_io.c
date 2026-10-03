@@ -394,6 +394,24 @@ int sm_interrupt_dsp(struct bridge_dev_context *dev_context, u16 mb_val)
 				(*pdata->dsp_set_min_opp) (VDD1_OPP2);
 		}
 #endif
+		/*
+		 * The IVA2 is off. Nokia's kernel woke its domain with the IVA2 clock's enable (the
+		 * clockdomain code then waited for the power transition) before anything below
+		 * touched it; mainline's clk_enable() doesn't, and the MPU stalled for good on the
+		 * first access to the powered-down IVA2. Force the domain on and wait for it,
+		 * the DSP boots into its warm boot (set_warmboot_addr()); back to hardware control
+		 * once it runs.
+		 */
+		dsp_clk_enable(DSP_CLK_IVA2);
+		(*pdata->dsp_cm_write)(OMAP34XX_CLKSTCTRL_FORCE_WAKEUP,
+				       OMAP3430_IVA2_MOD, OMAP2_CM_CLKSTCTRL);
+		for (temp = 0; temp < 10000 &&
+		     ((*pdata->dsp_prm_read)(OMAP3430_IVA2_MOD, OMAP2_PM_PWSTST) &
+		      OMAP_POWERSTATEST_MASK) != PWRDM_POWER_ON; temp++)
+			udelay(1);
+		if (temp == 10000)
+			pr_err("%s: the IVA2 didn't power up\n", __func__);
+
 		/* Restart the peripheral clocks */
 		dsp_clock_enable_all(dev_context->dsp_per_clks);
 		dsp_wdt_enable(true);
@@ -419,6 +437,8 @@ int sm_interrupt_dsp(struct bridge_dev_context *dev_context, u16 mb_val)
 		/* Access MMU SYS CONFIG register to generate a short wakeup */
 		temp = readl(resources->dmmu_base + 0x10);
 
+		(*pdata->dsp_cm_write)(OMAP34XX_CLKSTCTRL_ENABLE_AUTO,
+				       OMAP3430_IVA2_MOD, OMAP2_CM_CLKSTCTRL);
 		dev_context->brd_state = BRD_RUNNING;
 	} else if (dev_context->brd_state == BRD_RETENTION) {
 		/* Restart the peripheral clocks */

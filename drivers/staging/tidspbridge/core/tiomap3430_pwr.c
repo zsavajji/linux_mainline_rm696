@@ -109,6 +109,9 @@ int handle_hibernation_from_dsp(struct bridge_dev_context *dev_context)
 		/* Turn off DSP Peripheral clocks and DSP Load monitor timer */
 		status = dsp_clock_disable_all(dev_context->dsp_per_clks);
 
+		/* and the IVA2's own, as Nokia's driver: sm_interrupt_dsp() wakes it with it */
+		dsp_clk_disable(DSP_CLK_IVA2);
+
 		/* Disable wdt on hibernation. */
 		dsp_wdt_enable(false);
 
