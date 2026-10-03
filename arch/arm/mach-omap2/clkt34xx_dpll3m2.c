@@ -307,7 +307,7 @@ static const struct file_operations l3_fops = {
 static int __init omap3_l3_policy_init(void)
 {
 	struct cpufreq_policy *policy;
-	struct clk *m2;
+	struct clk *m2, *dpll3;
 
 	/* SDRAM timings for both rates come from the board (sdram-nokia.c for the N9 and N950) */
 	if (!of_machine_is_compatible("nokia,omap3-n9") && !of_machine_is_compatible("nokia,omap3-n950"))
@@ -315,6 +315,16 @@ static int __init omap3_l3_policy_init(void)
 	m2 = clk_get(NULL, "dpll3_m2_ck");
 	if (IS_ERR(m2))
 		return PTR_ERR(m2);
+	/*
+	 * DM3730 erratum 1.85 (SPRZ319F): with DPLL3 in automatic mode, a wakeup while it goes to bypass
+	 * (CORE retention) can release the SDRC from idle on the bypass clock before DPLL3 locks.
+	 * Workaround 1: DPLL3 always locked (CM_AUTOIDLE_PLL AUTO_CORE_DPLL 0). Stock instead allowed
+	 * automatic mode only around CORE retention, at L3 OPP50 and VDD2 OPP100 (workaround 2), which
+	 * also stops DPLL3 in retention: worth it once CORE reaches retention at all
+	 */
+	dpll3 = clk_get(NULL, "dpll3_ck");
+	if (!IS_ERR(dpll3))
+		omap2_clk_deny_idle(dpll3);
 	l3_high = clk_get_rate(m2);
 	l3_low = l3_high / 2;
 	policy = cpufreq_cpu_get(0);
