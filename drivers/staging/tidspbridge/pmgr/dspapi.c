@@ -17,6 +17,7 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 #include <linux/types.h>
+#include <linux/binfmts.h>
 
 /*  ----------------------------------- Host OS */
 #include <dspbridge/host_os.h>
@@ -414,9 +415,10 @@ u32 mgrwrap_register_object(union trapped_args *args, void *pr_ctxt)
 	CP_FM_USR(&uuid_obj, args->args_mgr_registerobject.uuid_obj, status, 1);
 	if (status)
 		goto func_end;
-	path_size = strlen_user((char *)
-				args->args_mgr_registerobject.sz_path_name);
-	if (!path_size) {
+	path_size = strnlen_user((char __user *)
+				 args->args_mgr_registerobject.sz_path_name,
+				 PATH_MAX);
+	if (!path_size || path_size > PATH_MAX) {
 		status = -EINVAL;
 		goto func_end;
 	}
@@ -783,8 +785,13 @@ u32 procwrap_load(union trapped_args *args, void *pr_ctxt)
 		if (argv[i]) {
 			/* User space pointer to argument */
 			temp = (char *)argv[i];
-			/* len is increased by 1 to accommodate NULL */
-			len = strlen_user((char *)temp) + 1;
+			/* len includes the terminating NUL */
+			len = strnlen_user((char __user *)temp,
+					   MAX_ARG_STRLEN);
+			if (!len || len > MAX_ARG_STRLEN) {
+				status = -EINVAL;
+				goto func_cont;
+			}
 			/* Kernel space pointer to argument */
 			argv[i] = kmalloc(len, GFP_KERNEL);
 			if (argv[i]) {
@@ -827,8 +834,13 @@ u32 procwrap_load(union trapped_args *args, void *pr_ctxt)
 		for (i = 0; envp[i]; i++) {
 			/* User space pointer to argument */
 			temp = (char *)envp[i];
-			/* len is increased by 1 to accommodate NULL */
-			len = strlen_user((char *)temp) + 1;
+			/* len includes the terminating NUL */
+			len = strnlen_user((char __user *)temp,
+					   MAX_ARG_STRLEN);
+			if (!len || len > MAX_ARG_STRLEN) {
+				status = -EINVAL;
+				goto func_cont;
+			}
 			/* Kernel space pointer to argument */
 			envp[i] = kmalloc(len, GFP_KERNEL);
 			if (envp[i]) {

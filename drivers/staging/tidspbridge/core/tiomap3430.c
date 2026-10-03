@@ -228,12 +228,8 @@ static inline void flush_all(struct bridge_dev_context *dev_context)
 static void bad_page_dump(u32 pa, struct page *pg)
 {
 	pr_emerg("DSPBRIDGE: MAP function: COUNT 0 FOR PA 0x%x\n", pa);
-	pr_emerg("Bad page state in process '%s'\n"
-		 "page:%p flags:0x%0*lx mapping:%p mapcount:%d count:%d\n"
-		 "Backtrace:\n",
-		 current->comm, pg, (int)(2 * sizeof(unsigned long)),
-		 (unsigned long)pg->flags, pg->mapping,
-		 page_mapcount(pg), page_count(pg));
+	pr_emerg("Bad page state in process '%s'\n", current->comm);
+	dump_page(pg, "tidspbridge");
 	dump_stack();
 }
 
@@ -1137,12 +1133,11 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 	struct hw_mmu_map_attrs_t hw_attrs;
 	struct vm_area_struct *vma;
 	struct mm_struct *mm = current->mm;
-	u32 write = 0;
+	unsigned int gup_flags = FOLL_FORCE;
 	u32 num_usr_pgs = 0;
 	struct page *mapped_page, *pg;
 	s32 pg_num;
 	u32 va = virt_addr;
-	struct task_struct *curr_task = current;
 	u32 pg_i = 0;
 	u32 mpu_addr, pa;
 
@@ -1214,7 +1209,7 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 	 * to current process - it must lie completely within the current
 	 * virtual memory address space in order to be of use to us here!
 	 */
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	vma = find_vma(mm, ul_mpu_addr);
 	if (vma)
 		dev_dbg(bridge,
@@ -1241,7 +1236,7 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 		pr_err("%s: Failed to get VMA region for 0x%x (%d)\n",
 		       __func__, ul_mpu_addr, ul_num_bytes);
 		status = -EINVAL;
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 		goto func_cont;
 	}
 
@@ -1278,11 +1273,17 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 	} else {
 		num_usr_pgs = ul_num_bytes / PG_SIZE4K;
 		if (vma->vm_flags & (VM_WRITE | VM_MAYWRITE))
-			write = 1;
+			gup_flags |= FOLL_WRITE;
 
+		/*
+		 * Every page mapped into the DSP MMU holds a plain page
+		 * reference that bridge_brd_mem_un_map() drops with put_page(),
+		 * also for the VM_IO and vmalloc mappings (get_page()), so this
+		 * stays get_user_pages() and not pin_user_pages().
+		 */
 		for (pg_i = 0; pg_i < num_usr_pgs; pg_i++) {
-			pg_num = get_user_pages(curr_task, mm, ul_mpu_addr, 1,
-						write, 1, &mapped_page, NULL);
+			pg_num = get_user_pages(ul_mpu_addr, 1, gup_flags,
+						&mapped_page);
 			if (pg_num > 0) {
 				if (page_count(mapped_page) < 1) {
 					pr_err("Bad page count after doing"
@@ -1315,7 +1316,7 @@ static int bridge_brd_mem_map(struct bridge_dev_context *dev_ctxt,
 			}
 		}
 	}
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 func_cont:
 	if (status) {
 		/*
@@ -1448,7 +1449,7 @@ static int bridge_brd_mem_un_map(struct bridge_dev_context *dev_ctxt,
 					bad_page_dump(paddr, pg);
 				} else {
 					set_page_dirty(pg);
-					page_cache_release(pg);
+					put_page(pg);
 				}
 				paddr += HW_PAGE_SIZE4KB;
 			}
@@ -1510,7 +1511,7 @@ skip_coarse_page:
 					bad_page_dump(paddr, pg);
 				} else {
 					set_page_dirty(pg);
-					page_cache_release(pg);
+					put_page(pg);
 				}
 			}
 			paddr += HW_PAGE_SIZE4KB;
@@ -1545,31 +1546,16 @@ EXIT_LOOP:
  */
 static u32 user_va2_pa(struct mm_struct *mm, u32 address)
 {
-	pgd_t *pgd;
-	pud_t *pud;
-	pmd_t *pmd;
-	pte_t *ptep, pte;
+	struct follow_pfnmap_args args = { .address = address };
+	u32 pa;
 
-	pgd = pgd_offset(mm, address);
-	if (pgd_none(*pgd) || pgd_bad(*pgd))
+	args.vma = vma_lookup(mm, address);
+	if (!args.vma || follow_pfnmap_start(&args))
 		return 0;
+	pa = PFN_PHYS(args.pfn);
+	follow_pfnmap_end(&args);
 
-	pud = pud_offset(pgd, address);
-	if (pud_none(*pud) || pud_bad(*pud))
-		return 0;
-
-	pmd = pmd_offset(pud, address);
-	if (pmd_none(*pmd) || pmd_bad(*pmd))
-		return 0;
-
-	ptep = pte_offset_map(pmd, address);
-	if (ptep) {
-		pte = *ptep;
-		if (pte_present(pte))
-			return pte & PAGE_MASK;
-	}
-
-	return 0;
+	return pa;
 }
 
 /*

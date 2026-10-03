@@ -524,7 +524,7 @@ static int omap34_xx_bridge_probe(struct platform_device *pdev)
 	}
 
 	/* udev support */
-	bridge_class = class_create(THIS_MODULE, "ti_bridge");
+	bridge_class = class_create("ti_bridge");
 	if (IS_ERR(bridge_class)) {
 		pr_err("%s: Error creating bridge class\n", __func__);
 		err = PTR_ERR(bridge_class);
@@ -546,15 +546,13 @@ err1:
 	return err;
 }
 
-static int omap34_xx_bridge_remove(struct platform_device *pdev)
+static void omap34_xx_bridge_remove(struct platform_device *pdev)
 {
 	dev_t devno;
-	int status = 0;
 	struct drv_data *drv_datap = dev_get_drvdata(bridge);
 
 	/* Retrieve the Object handle from the driver data */
 	if (!drv_datap || !drv_datap->drv_object) {
-		status = -ENODATA;
 		pr_err("%s: Failed to retrieve the object handle\n", __func__);
 		goto func_cont;
 	}
@@ -589,7 +587,6 @@ func_cont:
 		class_destroy(bridge_class);
 
 	}
-	return status;
 }
 
 #ifdef CONFIG_PM

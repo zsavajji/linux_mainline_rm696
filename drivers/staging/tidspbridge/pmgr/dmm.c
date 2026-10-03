@@ -87,9 +87,8 @@ int dmm_create_tables(struct dmm_object *dmm_mgr, u32 addr, u32 size)
 		dyn_mem_map_beg = addr;
 		table_size = PG_ALIGN_HIGH(size, PG_SIZE4K) / PG_SIZE4K;
 		/*  Create the free list */
-		virtual_mapping_table = __vmalloc(table_size *
-				sizeof(struct map_page), GFP_KERNEL |
-				__GFP_HIGHMEM | __GFP_ZERO, PAGE_KERNEL);
+		virtual_mapping_table = vzalloc(table_size *
+				sizeof(struct map_page));
 		if (virtual_mapping_table == NULL)
 			status = -ENOMEM;
 		else {
