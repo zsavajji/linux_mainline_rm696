@@ -19,26 +19,58 @@
 #ifndef _TIOMAP_
 #define _TIOMAP_
 
-/*
- * XXX These powerdomain.h/clockdomain.h includes are wrong and should
- * be removed.  No driver should call pwrdm_* or clkdm_* functions
- * directly; they should rely on OMAP core code to do this.
- */
-#include <mach-omap2/powerdomain.h>
-#include <mach-omap2/clockdomain.h>
-/*
- * XXX These mach-omap2/ includes are wrong and should be removed.  No
- * driver should read or write to PRM/CM registers directly; they
- * should rely on OMAP core code to do this.
- */
-#include <mach-omap2/cm3xxx.h>
-#include <mach-omap2/prm-regbits-34xx.h>
-#include <mach-omap2/cm-regbits-34xx.h>
 #include <dspbridge/devdefs.h>
 #include <hw_defs.h>
 #include <dspbridge/dspioctl.h>	/* for bridge_ioctl_extproc defn */
 #include <dspbridge/sync.h>
 #include <dspbridge/clk.h>
+
+/*
+ * OMAP3 PRCM registers and bits the bridge uses (OMAP34xx/36xx TRM).
+ * The IVA2 PRM/CM registers are accessed through the platform data
+ * callbacks (struct omap_dsp_platform_data) with the mach-omap2 module
+ * and register offsets below; the PER/CORE wakeup group selection
+ * registers through the driver's own mappings (cfg_hostres).
+ */
+#define OMAP3430_IVA2_MOD		-0x800	/* PRM/CM module offset */
+#define OMAP2_RM_RSTCTRL		0x0050	/* RM_RSTCTRL_IVA2 */
+#define OMAP2_PM_PWSTCTRL		0x00e0	/* PM_PWSTCTRL_IVA2 */
+#define OMAP2_PM_PWSTST			0x00e4	/* PM_PWSTST_IVA2 */
+#define OMAP2_CM_CLKSTCTRL		0x0048	/* CM_CLKSTCTRL_IVA2 */
+#define OMAP3430_CM_CLKEN_PLL		0x0004	/* CM_CLKEN_PLL_IVA2 */
+#define OMAP3430_CM_AUTOIDLE_PLL	0x0034	/* CM_AUTOIDLE_PLL_IVA2 */
+
+#define OMAP3430_RST1_IVA2_MASK		(1 << 0)
+#define OMAP3430_RST2_IVA2_MASK		(1 << 1)
+#define OMAP3430_RST3_IVA2_MASK		(1 << 2)
+
+#define OMAP_POWERSTATEST_MASK		(0x3 << 0)
+#define OMAP_INTRANSITION_MASK		(1 << 20)
+#define PWRDM_POWER_OFF			0x0
+#define PWRDM_POWER_RET			0x1
+#define PWRDM_POWER_ON			0x3
+
+#define OMAP34XX_CLKSTCTRL_DISABLE_AUTO	0x0
+#define OMAP34XX_CLKSTCTRL_FORCE_SLEEP	0x1
+#define OMAP34XX_CLKSTCTRL_FORCE_WAKEUP	0x2
+#define OMAP34XX_CLKSTCTRL_ENABLE_AUTO	0x3
+
+#define OMAP3430_AUTO_IVA2_DPLL_SHIFT	0
+#define OMAP3430_EN_IVA2_DPLL_SHIFT	0
+#define OMAP3430_EN_IVA2_DPLL_MASK	(0x7 << 0)
+#define OMAP3430_IVA2_DPLL_FREQSEL_SHIFT 4
+#define OMAP3430_IVA2_DPLL_FREQSEL_MASK	(0xf << 4)
+
+/* PM_{MPU,IVA2}GRPSEL_PER and _CORE bits */
+#define OMAP3430_GRPSEL_MCBSP2_MASK	(1 << 0)
+#define OMAP3430_GRPSEL_MCBSP3_MASK	(1 << 1)
+#define OMAP3430_GRPSEL_MCBSP4_MASK	(1 << 2)
+#define OMAP3430_GRPSEL_GPT5_MASK	(1 << 6)
+#define OMAP3430_GRPSEL_GPT6_MASK	(1 << 7)
+#define OMAP3430_GRPSEL_GPT7_MASK	(1 << 8)
+#define OMAP3430_GRPSEL_GPT8_MASK	(1 << 9)
+#define OMAP3430_GRPSEL_MCBSP1_MASK	(1 << 9)
+#define OMAP3430_GRPSEL_MCBSP5_MASK	(1 << 10)
 
 struct map_l4_peripheral {
 	u32 phys_addr;

@@ -44,8 +44,6 @@
 /*  ----------------------------------- specific to this file */
 #include "_tiomap.h"
 #include "_tiomap_pwr.h"
-#include <mach-omap2/prm-regbits-34xx.h>
-#include <mach-omap2/cm-regbits-34xx.h>
 
 #define PWRSTST_TIMEOUT          200
 

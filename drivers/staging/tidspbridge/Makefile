@@ -27,5 +27,4 @@ ccflags-y += -I$(src)/pmgr
 ccflags-y += -I$(src)/rmgr
 ccflags-y += -I$(src)/dynload
 ccflags-y += -I$(src)/hw
-ccflags-y += -I$(srctree)/arch/arm
 
