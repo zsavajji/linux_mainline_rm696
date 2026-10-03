@@ -123,6 +123,27 @@
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 		};
+
+		/* the DSP bridge's pool (below), as stock's boot-time carveout for its 5 MiB of SHM */
+		dsp_pool: dsp-pool {
+			size = <0x600000>;
+			alignment = <0x100000>;
+			no-map;
+		};
+	};
+
+	/*
+	 * The DSP bridge (bridgedriver.ko, for Harmattan's gst-dsp): its memory, never mapped by the kernel
+	 * (the bridge ioremaps it, userspace mmaps the shared-memory segment); the DSP mailbox; the IVA2
+	 * MMU's and WDT3's interrupts. mmu_iva stays disabled: the bridge drives the IVA2 MMU itself
+	 */
+	dsp-bridge {
+		compatible = "ti,omap3-dspbridge";
+		memory-region = <&dsp_pool>;
+		mboxes = <&mailbox &mbox_dsp>;
+		mbox-names = "dsp";
+		interrupts = <28>, <36>;
+		interrupt-names = "mmu", "wdt";
 	};
 };
 
