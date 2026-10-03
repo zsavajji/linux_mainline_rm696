@@ -24,13 +24,16 @@
 #include <linux/platform_data/wkup_m3.h>
 #include <linux/platform_data/asoc-ti-mcbsp.h>
 #include <linux/platform_data/ti-prm.h>
+#include <linux/platform_data/dsp-omap.h>
 
 #include "clockdomain.h"
+#include "cm2xxx_3xxx.h"
 #include "common.h"
 #include "common-board-devices.h"
 #include "control.h"
 #include "omap_device.h"
 #include "omap-secure.h"
+#include "prm2xxx_3xxx.h"
 #include "soc.h"
 #include "sdram-nokia.h"
 
@@ -422,6 +425,35 @@ static struct ti_prm_platform_data ti_prm_pdata = {
 	.clkdm_lookup = clkdm_lookup,
 };
 
+#if defined(CONFIG_ARCH_OMAP3) && IS_ENABLED(CONFIG_TIDSPBRIDGE)
+/*
+ * DSP bridge (drivers/staging/tidspbridge): IVA2 reset/power/clock domain
+ * and DPLL2 registers in the PRM/CM, and the IVA2 boot address and mode in
+ * the system control module, which the driver cannot reach itself. This is
+ * what mach-omap2/dsp.c provided before the driver was removed in v3.17.
+ */
+static void omap3_dsp_set_bootaddr(u32 bootaddr)
+{
+	omap_ctrl_writel(bootaddr, OMAP343X_CONTROL_IVA2_BOOTADDR);
+}
+
+static void omap3_dsp_set_bootmode(u8 bootmode)
+{
+	omap_ctrl_writel(bootmode, OMAP343X_CONTROL_IVA2_BOOTMOD);
+}
+
+static struct omap_dsp_platform_data omap3_dsp_pdata = {
+	.dsp_prm_read = omap2_prm_read_mod_reg,
+	.dsp_prm_write = omap2_prm_write_mod_reg,
+	.dsp_prm_rmw_bits = omap2_prm_rmw_mod_reg_bits,
+	.dsp_cm_read = omap2_cm_read_mod_reg,
+	.dsp_cm_write = omap2_cm_write_mod_reg,
+	.dsp_cm_rmw_bits = omap2_cm_rmw_mod_reg_bits,
+	.set_bootaddr = omap3_dsp_set_bootaddr,
+	.set_bootmode = omap3_dsp_set_bootmode,
+};
+#endif
+
 #if defined(CONFIG_ARCH_OMAP3) && IS_ENABLED(CONFIG_SND_SOC_OMAP_MCBSP)
 static struct omap_mcbsp_platform_data mcbsp_pdata;
 static void __init omap3_mcbsp_init(void)
@@ -468,6 +500,10 @@ static struct of_dev_auxdata omap_auxdata_lookup[] = {
 	OF_DEV_AUXDATA("ti,am3517-emac", 0x5c000000, "davinci_emac.0",
 		       &am35xx_emac_pdata),
 	OF_DEV_AUXDATA("nokia,n900-rom-rng", 0, NULL, rx51_secure_rng_call),
+#if IS_ENABLED(CONFIG_TIDSPBRIDGE)
+	/* no reg: matched by compatible */
+	OF_DEV_AUXDATA("ti,omap3-dspbridge", 0, NULL, &omap3_dsp_pdata),
+#endif
 	/* McBSP modules with sidetone core */
 #if IS_ENABLED(CONFIG_SND_SOC_OMAP_MCBSP)
 	OF_DEV_AUXDATA("ti,omap3-mcbsp", 0x49022000, "49022000.mcbsp", &mcbsp_pdata),
