@@ -21,6 +21,7 @@
 #include <linux/clk/ti.h>
 #include <linux/cpufreq.h>
 #include <linux/debugfs.h>
+#include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/seq_file.h>
@@ -137,9 +138,11 @@ out:
  * OPP, 300 MHz; the user's phone sets a 600 MHz floor) holds it high (cpufreq), and so do
  * omap3_l3_hold() callers (enum omap3_l3_user): the SGX from before it gets its clock until after it
  * lost it, so its clock (CORE/2) never changes while it runs; the display, USB and WLAN as stock asked
- * for bus throughput. Raised at once, lowered 1 s after the last hold went.
+ * for bus throughput. Raised at once, lowered l3_lower_delay_ms after the last hold went (1 s; in
+ * /sys/module/clkt34xx_dpll3m2/parameters, for tests).
  */
-#define L3_LOWER_DELAY_MS	1000
+static unsigned int l3_lower_delay_ms = 1000;
+module_param(l3_lower_delay_ms, uint, 0644);
 
 static struct clk *l3_m2;
 static unsigned long l3_high, l3_low;	/* dpll3_m2_ck rates */
@@ -211,7 +214,7 @@ void omap3_l3_release(enum omap3_l3_user who)
 {
 	mutex_lock(&l3_lock);
 	if (!WARN_ON(l3_holds[who] <= 0) && !--l3_holds[who])
-		mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(L3_LOWER_DELAY_MS));
+		mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(l3_lower_delay_ms));
 	mutex_unlock(&l3_lock);
 }
 EXPORT_SYMBOL_GPL(omap3_l3_release);
@@ -323,7 +326,7 @@ static int __init omap3_l3_policy_init(void)
 	l3_since = jiffies;
 	mutex_unlock(&l3_lock);
 	schedule_work(&l3_cpu);
-	mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(L3_LOWER_DELAY_MS));
+	mod_delayed_work(system_wq, &l3_lower, msecs_to_jiffies(l3_lower_delay_ms));
 	cpufreq_register_notifier(&l3_cpufreq_nb, CPUFREQ_TRANSITION_NOTIFIER);
 	debugfs_create_file("omap3_l3", 0600, NULL, NULL, &l3_fops);
 	pr_info("omap3-l3: L3 scaling, OPP100 %lu Hz, OPP50 %lu Hz (dpll3_m2_ck)\n", l3_high, l3_low);
