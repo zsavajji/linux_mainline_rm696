@@ -137,6 +137,7 @@ int omap_vc_pre_scale(struct voltagedomain *voltdm,
 		      u8 *target_vsel, u8 *current_vsel)
 {
 	struct omap_vc_channel *vc = voltdm->vc;
+	struct omap_vp_instance *vp = voltdm->vp;
 	u32 vc_cmdval;
 
 	/* Check if sufficient pmic info is available for this vdd */
@@ -159,7 +160,14 @@ int omap_vc_pre_scale(struct voltagedomain *voltdm,
 	}
 
 	*target_vsel = voltdm->pmic->uv_to_vsel(target_volt);
-	*current_vsel = voltdm->pmic->uv_to_vsel(voltdm->nominal_volt);
+	/*
+	 * omap_vc_post_scale() waits for the ramp from here, as the VP's TRANXDONE can come
+	 * before it ends (DM3730 erratum 1.46). SmartReflex moves the voltage off the nominal
+	 * one: start from the voltage the VP last sent, once it has sent one.
+	 */
+	*current_vsel = vp ? voltdm->read(vp->voltage) & vp->common->vpvoltage_mask : 0;
+	if (!*current_vsel)
+		*current_vsel = voltdm->pmic->uv_to_vsel(voltdm->nominal_volt);
 
 	/* Setting the ON voltage to the new target voltage */
 	vc_cmdval = voltdm->read(vc->cmdval_reg);
