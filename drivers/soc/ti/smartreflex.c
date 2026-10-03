@@ -792,6 +792,39 @@ static int omap_sr_autocomp_store(void *data, u64 val)
 DEFINE_SIMPLE_ATTRIBUTE(pm_sr_fops, omap_sr_autocomp_show,
 			omap_sr_autocomp_store, "%llu\n");
 
+/*
+ * autocomp also as /sys/power/sr_vdd1_autocomp (VDD1) and sr_vdd2_autocomp (VDD2), where Nokia's
+ * N9 kernel had it: Harmattan's /sbin/preinit writes /etc/pmconfig's values there at boot
+ * (/sbin/read_cfg.awk; stock's pmconfig turns both on).
+ */
+static const char * const sr_vdd_names[] = { "smartreflex_mpu_iva", "smartreflex_core" };
+static struct omap_sr *sr_vdd[ARRAY_SIZE(sr_vdd_names)];
+
+static ssize_t sr_vdd_autocomp_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+static ssize_t sr_vdd_autocomp_store(struct kobject *kobj, struct kobj_attribute *attr,
+				     const char *buf, size_t n);
+
+static struct kobj_attribute sr_vdd_attr[] = {
+	__ATTR(sr_vdd1_autocomp, 0644, sr_vdd_autocomp_show, sr_vdd_autocomp_store),
+	__ATTR(sr_vdd2_autocomp, 0644, sr_vdd_autocomp_show, sr_vdd_autocomp_store),
+};
+
+static ssize_t sr_vdd_autocomp_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", sr_vdd[attr - sr_vdd_attr]->autocomp_active);
+}
+
+static ssize_t sr_vdd_autocomp_store(struct kobject *kobj, struct kobj_attribute *attr,
+				     const char *buf, size_t n)
+{
+	u64 val;
+	int ret = kstrtou64(buf, 0, &val);
+
+	if (!ret)
+		ret = omap_sr_autocomp_store(sr_vdd[attr - sr_vdd_attr], val);
+	return ret ?: n;
+}
+
 static int omap_sr_probe(struct platform_device *pdev)
 {
 	struct omap_sr *sr_info;
@@ -902,6 +935,14 @@ static int omap_sr_probe(struct platform_device *pdev)
 
 	}
 
+	for (i = 0; i < ARRAY_SIZE(sr_vdd); i++) {
+		if (strcmp(sr_info->name, sr_vdd_names[i]))
+			continue;
+		sr_vdd[i] = sr_info;
+		if (sysfs_create_file(power_kobj, &sr_vdd_attr[i].attr))
+			dev_warn(&pdev->dev, "no /sys/power/%s\n", sr_vdd_attr[i].attr.name);
+	}
+
 	return 0;
 
 err_debugfs:
@@ -918,7 +959,14 @@ static void omap_sr_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct omap_sr *sr_info = platform_get_drvdata(pdev);
+	int i;
 
+	for (i = 0; i < ARRAY_SIZE(sr_vdd); i++) {
+		if (sr_vdd[i] != sr_info)
+			continue;
+		sysfs_remove_file(power_kobj, &sr_vdd_attr[i].attr);
+		sr_vdd[i] = NULL;
+	}
 	if (sr_info->autocomp_active)
 		sr_stop_vddautocomp(sr_info);
 	debugfs_remove_recursive(sr_info->dbg_dir);
