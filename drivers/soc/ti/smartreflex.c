@@ -160,6 +160,38 @@ static void sr_set_clk_length(struct omap_sr *sr)
 	}
 }
 
+/* @volt's own nTarget; a voltage sharing another's eFuse has none (sr_device.c) */
+static struct omap_sr_nvalue_table *sr_retrieve_nvalue_row(
+				struct omap_sr *sr, unsigned long volt)
+{
+	int i;
+
+	if (!sr->nvalue_table) {
+		dev_warn(&sr->pdev->dev, "%s: Missing ntarget value table\n",
+			 __func__);
+		return NULL;
+	}
+
+	for (i = 0; i < sr->nvalue_count; i++) {
+		if (sr->nvalue_table[i].volt_nominal == volt)
+			return &sr->nvalue_table[i];
+	}
+
+	return NULL;
+}
+
+/*
+ * SR runs at the voltages with an nTarget of their own and waits at the others: at the N9's
+ * boost OPPs, OPP1G's nTarget would steer VDD1 down to what 1 GHz needs. Autocomp stays on
+ * there; the next change to a voltage with an nTarget starts SR.
+ */
+static int sr_class_enable(struct omap_sr *sr)
+{
+	if (!sr_retrieve_nvalue_row(sr, voltdm_get_voltage(sr->voltdm)))
+		return 0;
+	return sr_class->enable(sr);
+}
+
 static void sr_start_vddautocomp(struct omap_sr *sr)
 {
 	if (!sr_class || !(sr_class->enable) || !(sr_class->configure)) {
@@ -170,7 +202,7 @@ static void sr_start_vddautocomp(struct omap_sr *sr)
 	}
 
 	mutex_lock(&sr_lock);
-	if (!sr->autocomp_active && !sr_class->enable(sr))
+	if (!sr->autocomp_active && !sr_class_enable(sr))
 		sr->autocomp_active = true;
 	mutex_unlock(&sr_lock);
 }
@@ -185,7 +217,7 @@ static void sr_stop_vddautocomp(struct omap_sr *sr)
 	}
 
 	mutex_lock(&sr_lock);
-	/* not running if its last start failed: its registers are unclocked then */
+	/* not running if it waits for a voltage with an nTarget: its registers are unclocked */
 	if (sr->enabled)
 		sr_class->disable(sr, 1);
 	sr->autocomp_active = false;
@@ -306,25 +338,6 @@ static void sr_v2_disable(struct omap_sr *sr)
 	/* Disable MCUDisableAcknowledge interrupt & clear pending interrupt */
 	sr_write_reg(sr, IRQENABLE_CLR, IRQENABLE_MCUDISABLEACKINT);
 	sr_write_reg(sr, IRQSTATUS, IRQSTATUS_MCUDISABLEACKINT);
-}
-
-static struct omap_sr_nvalue_table *sr_retrieve_nvalue_row(
-				struct omap_sr *sr, u32 efuse_offs)
-{
-	int i;
-
-	if (!sr->nvalue_table) {
-		dev_warn(&sr->pdev->dev, "%s: Missing ntarget value table\n",
-			 __func__);
-		return NULL;
-	}
-
-	for (i = 0; i < sr->nvalue_count; i++) {
-		if (sr->nvalue_table[i].efuse_offs == efuse_offs)
-			return &sr->nvalue_table[i];
-	}
-
-	return NULL;
 }
 
 /* Public Functions */
@@ -551,7 +564,6 @@ int sr_configure_minmax(struct omap_sr *sr)
  */
 int sr_enable(struct omap_sr *sr, unsigned long volt)
 {
-	struct omap_volt_data *volt_data;
 	struct omap_sr_nvalue_table *nvalue_row;
 	int ret;
 
@@ -561,15 +573,7 @@ int sr_enable(struct omap_sr *sr, unsigned long volt)
 		return -EINVAL;
 	}
 
-	volt_data = omap_voltage_get_voltdata(sr->voltdm, volt);
-
-	if (IS_ERR(volt_data)) {
-		dev_warn(&sr->pdev->dev, "%s: Unable to get voltage table for nominal voltage %ld\n",
-			 __func__, volt);
-		return PTR_ERR(volt_data);
-	}
-
-	nvalue_row = sr_retrieve_nvalue_row(sr, volt_data->sr_efuse_offs);
+	nvalue_row = sr_retrieve_nvalue_row(sr, volt);
 
 	if (!nvalue_row) {
 		dev_warn(&sr->pdev->dev, "%s: failure getting SR data for this voltage %ld\n",
@@ -705,7 +709,7 @@ int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
 		sr_class->disable(sr, 0);
 	ret = scale(voltdm, volt);
 	if (sr)
-		sr_class->enable(sr);
+		sr_class_enable(sr);
 	mutex_unlock(&sr_lock);
 
 	return ret;

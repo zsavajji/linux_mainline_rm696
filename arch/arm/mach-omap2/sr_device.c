@@ -45,6 +45,17 @@ static void __init sr_set_nvalues(struct omap_volt_data *volt_data,
 
 	for (i = 0, j = 0; i < count; i++) {
 		u32 v;
+		int k;
+
+		/*
+		 * A voltage sharing an earlier one's eFuse (the N9's boost OPPs, OPP1G's) has no
+		 * nTarget of its own: SmartReflex doesn't run there
+		 */
+		for (k = 0; k < i; k++)
+			if (volt_data[k].sr_efuse_offs == volt_data[i].sr_efuse_offs)
+				break;
+		if (k < i)
+			continue;
 
 		/*
 		 * In OMAP4 the efuse registers are 24 bit aligned.
