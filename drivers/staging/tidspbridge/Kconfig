@@ -20,12 +20,18 @@ menuconfig TIDSPBRIDGE
 
 config TIDSPBRIDGE_DVFS
 	bool "Enable Bridge Dynamic Voltage and Frequency Scaling (DVFS)"
-	depends on TIDSPBRIDGE && CPU_FREQ
+	depends on TIDSPBRIDGE && CPU_FREQ && BROKEN
 	help
 	  DVFS allows DSP Bridge to initiate the operating point change to
 	  scale the chip voltage and frequency in order to match the
 	  performance and power consumption to the current processing
 	  requirements.
+
+	  Not ported: it is built on the removed OMAP PM layer (omap_pm,
+	  mach-omap2/omap3-opp.h VDD1 OPP ids, the dsp_set_min_opp/
+	  dsp_get_opp/cpu_set_freq platform data hooks). Without it the DSP
+	  runs at the IVA2 clock rate it is given and its OPP requests are
+	  ignored.
 
 config TIDSPBRIDGE_RECOVERY
 	bool "Recovery Support"

@@ -13,6 +13,11 @@
 * Use kernel coding style
 * checkpatch.pl fixes
 * allocate ext_mem_pool from consistent memory instead of using ioremap
+* DVFS (TIDSPBRIDGE_DVFS): port to the OPP/cpufreq and clk APIs (VDD1 is
+  shared by the MPU and the IVA2 on OMAP36xx: the IVA2 rate must follow
+  the VDD1 OPP, or the DSP must hold a minimum OPP while running)
+* pin user buffers with pin_user_pages(FOLL_LONGTERM) (needs per-mapping
+  page release instead of the per-PTE put_page() in brd_mem_un_map)
 
 Please send any patches to Greg Kroah-Hartman <greg@kroah.com>
 and Omar Ramirez Luna <omar.ramirez@ti.com>.
