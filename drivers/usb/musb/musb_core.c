@@ -2903,6 +2903,28 @@ static int musb_runtime_suspend(struct device *dev)
 	return 0;
 }
 
+/*
+ * Whether the controller lost its registers while runtime suspended. The FIFO setup is written once at
+ * init and reads 0 after a reset; endpoint 1's FIFO never starts at 0 (endpoint 0 is first)
+ */
+static bool musb_context_lost(struct musb *musb)
+{
+	void __iomem *mbase = musb->mregs;
+	unsigned long flags;
+	bool lost;
+	u8 index;
+
+	if (!musb->dyn_fifo || musb->config->num_eps < 2 || !musb->context.index_regs[1].txfifoadd)
+		return true;
+	spin_lock_irqsave(&musb->lock, flags);
+	index = musb_readb(mbase, MUSB_INDEX);
+	musb_writeb(mbase, MUSB_INDEX, 1);
+	lost = musb_readw(mbase, MUSB_TXFIFOADD) != musb->context.index_regs[1].txfifoadd;
+	musb_writeb(mbase, MUSB_INDEX, index);
+	spin_unlock_irqrestore(&musb->lock, flags);
+	return lost;
+}
+
 static int musb_runtime_resume(struct device *dev)
 {
 	struct musb *musb = dev_to_musb(dev);
@@ -2921,7 +2943,15 @@ static int musb_runtime_resume(struct device *dev)
 	if (!musb->is_initialized)
 		return 0;
 
-	musb_restore_context(musb);
+	/*
+	 * A controller that kept its registers may already be back on the bus: the glue's resume runs
+	 * first (omap2430 then waits 200 ms for the PHY), and a host can enumerate it meanwhile. The
+	 * context saved at suspend would then undo the endpoints configured since, as an ECM gadget's
+	 * notification endpoint left with TXMAXP 0, which never sends its notification. With the
+	 * registers lost, the soft connect bit is lost too, and nothing can have happened.
+	 */
+	if (musb_context_lost(musb))
+		musb_restore_context(musb);
 
 	spin_lock_irqsave(&musb->lock, flags);
 	error = musb_run_resume_work(musb);
