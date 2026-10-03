@@ -55,6 +55,11 @@
 #include "_tiomap_pwr.h"
 #include "tiomap_io.h"
 
+/* The mailbox (omap-mailbox's), for draining the MPU-to-DSP FIFO at start */
+#define OMAP3_MAILBOX_BASE	0x48094000
+#define MAILBOX_MESSAGE0	0x40
+#define MAILBOX_MSGSTATUS0	0xc0
+
 /* Offset in shared mem to write to in order to synchronize start with DSP */
 #define SHMSYNCOFFSET 4		/* GPP byte offset */
 
@@ -550,6 +555,22 @@ static int bridge_brd_start(struct bridge_dev_context *dev_ctxt,
 			       __func__, PTR_ERR(dev_context->mbox));
 			dev_context->mbox = NULL;
 			status = -EPERM;
+		}
+		/*
+		 * Nokia's kernel soft-reset the mailbox at every start. A message the previous DSP
+		 * never read (the DSPIDLE of the stop before a load) would otherwise be the first
+		 * the new one sees: drain the MPU-to-DSP FIFO (mailbox 0) before it runs
+		 */
+		if (!status) {
+			void __iomem *mb = ioremap(OMAP3_MAILBOX_BASE, SZ_4K);
+			int n;
+
+			for (n = 0; mb && n < 8 && (readl(mb + MAILBOX_MSGSTATUS0) & 0x7); n++)
+				readl(mb + MAILBOX_MESSAGE0);
+			if (n)
+				dev_dbg(bridge, "%s: %d stale messages to the DSP dropped\n", __func__, n);
+			if (mb)
+				iounmap(mb);
 		}
 
 	}
