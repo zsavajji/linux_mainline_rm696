@@ -3178,6 +3178,13 @@ ieee80211_find_80211h_pwr_constr(struct ieee80211_channel *channel,
 		country_ie_len -= 3;
 	}
 
+	/*
+	 * -128 dBm (0x80) is no limit: some APs fill every channel's triplet
+	 * with it, and taking it literally would set the TX power to 0 dBm
+	 */
+	if (have_chan_pwr && *chan_pwr == -128)
+		have_chan_pwr = false;
+
 	if (have_chan_pwr && pwr_constr_elem)
 		*pwr_reduction = *pwr_constr_elem;
 	else
