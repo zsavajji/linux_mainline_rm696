@@ -9,6 +9,7 @@
 /* #define DEBUG */
 
 #include <linux/backlight.h>
+#include <linux/clk/ti.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/fb.h>
@@ -137,6 +138,15 @@ struct panel_drv_data {
 	u32 split_late_us;
 	struct pm_qos_request idle_qos;
 	u32 idle_latency_us;
+
+	/*
+	 * L3 (OMAP3 CORE/L3 scaling) held high, as stock asked while a display was on: the DSS's
+	 * 172.8 MHz functional clock is too fast for VDD2 at OPP50 (stock's omap_dss_start_device:
+	 * "DSS does not work properly if DSS clocks are over 100MHz and VDD2 is at the lowest OPP").
+	 * Held while the DSS runs, and while the panel is on outside its standby screen (LPM); stock
+	 * held it in LPM too, sysfs l3_lpm_hold does that (the fallback if LPM misbehaves at OPP50)
+	 */
+	bool l3_held, l3_lpm_hold;
 };
 
 #define to_panel_data(p) container_of(p, struct panel_drv_data, dssdev)
@@ -298,6 +308,19 @@ static void dsicm_cancel_ulps_work(struct panel_drv_data *ddata)
 	cancel_delayed_work(&ddata->ulps_work);
 }
 
+static void dsicm_set_l3_hold(struct panel_drv_data *ddata, bool dss_on)
+{
+	bool want = dss_on || (ddata->enabled && (!ddata->lpm || ddata->l3_lpm_hold));
+
+	if (want == ddata->l3_held)
+		return;
+	ddata->l3_held = want;
+	if (want)
+		omap3_l3_hold(OMAP3_L3_DSS);
+	else
+		omap3_l3_release(OMAP3_L3_DSS);
+}
+
 static int dsicm_enter_ulps(struct panel_drv_data *ddata)
 {
 	struct omap_dss_device *in = ddata->in;
@@ -318,6 +341,7 @@ static int dsicm_enter_ulps(struct panel_drv_data *ddata)
 	in->ops.dsi->disable(in, false, true);
 
 	ddata->ulps_enabled = true;
+	dsicm_set_l3_hold(ddata, false);
 
 	return 0;
 
@@ -340,6 +364,7 @@ static int dsicm_exit_ulps(struct panel_drv_data *ddata)
 	if (!ddata->ulps_enabled)
 		return 0;
 
+	dsicm_set_l3_hold(ddata, true);
 	r = in->ops.dsi->enable(in);
 	if (r) {
 		dev_err(&ddata->pdev->dev, "failed to enable DSI\n");
@@ -373,6 +398,7 @@ err2:
 		ddata->ulps_enabled = false;
 	}
 err1:
+	dsicm_set_l3_hold(ddata, ddata->enabled && !ddata->ulps_enabled);
 	dsicm_queue_ulps_work(ddata);
 
 	return r;
@@ -567,6 +593,7 @@ static void dsicm_lpm_work(struct work_struct *work)
 		ddata->lpm = true;
 		dsicm_apply(ddata, dsicm_write_lpm);
 		dsicm_set_idle_qos(ddata);
+		dsicm_set_l3_hold(ddata, ddata->enabled && !ddata->ulps_enabled);
 	}
 	mutex_unlock(&ddata->lock);
 }
@@ -596,6 +623,7 @@ static ssize_t dsicm_lpm_store(struct device *dev, struct device_attribute *attr
 		ddata->lpm = false;
 		r = dsicm_apply(ddata, dsicm_write_lpm);
 		dsicm_set_idle_qos(ddata);
+		dsicm_set_l3_hold(ddata, ddata->enabled && !ddata->ulps_enabled);
 	}
 	mutex_unlock(&ddata->lock);
 
@@ -947,16 +975,42 @@ static ssize_t dsicm_split_late_us_store(struct device *dev, struct device_attri
 	return r ? r : count;
 }
 
+static ssize_t dsicm_l3_lpm_hold_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ddata->l3_lpm_hold);
+}
+
+static ssize_t dsicm_l3_lpm_hold_store(struct device *dev, struct device_attribute *attr,
+				       const char *buf, size_t count)
+{
+	struct panel_drv_data *ddata = dev_get_drvdata(dev);
+	bool t;
+	int r = kstrtobool(buf, &t);
+
+	if (r)
+		return r;
+	mutex_lock(&ddata->lock);
+	ddata->l3_lpm_hold = t;
+	dsicm_set_l3_hold(ddata, ddata->enabled && !ddata->ulps_enabled);
+	mutex_unlock(&ddata->lock);
+	return count;
+}
+
 static DEVICE_ATTR(split_late_us, S_IRUGO | S_IWUSR, dsicm_split_late_us_show,
 		   dsicm_split_late_us_store);
 static DEVICE_ATTR(update_stats, S_IRUGO | S_IWUSR, dsicm_update_stats_show,
 		   dsicm_update_stats_store);
 static DEVICE_ATTR(idle_latency_us, S_IRUGO | S_IWUSR, dsicm_idle_latency_us_show,
 		   dsicm_idle_latency_us_store);
+static DEVICE_ATTR(l3_lpm_hold, S_IRUGO | S_IWUSR, dsicm_l3_lpm_hold_show,
+		   dsicm_l3_lpm_hold_store);
 
 static struct attribute *dsicm_attrs[] = {
 	&dev_attr_update_stats.attr,
 	&dev_attr_idle_latency_us.attr,
+	&dev_attr_l3_lpm_hold.attr,
 	&dev_attr_split_late_us.attr,
 	&dev_attr_num_dsi_errors.attr,
 	&dev_attr_hw_revision.attr,
@@ -1039,6 +1093,7 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 		goto err0;
 	}
 
+	dsicm_set_l3_hold(ddata, true);
 	r = in->ops.dsi->enable(in);
 	if (r) {
 		dev_err(&ddata->pdev->dev, "failed to enable DSI\n");
@@ -1162,6 +1217,7 @@ err:
 
 	in->ops.dsi->disable(in, true, false);
 err0:
+	dsicm_set_l3_hold(ddata, false);
 	/* sgx: NOLO's panel didn't answer: a full power on, as stock */
 	if (skip_init) {
 		omapdss_def_disp_done();
@@ -1192,6 +1248,7 @@ static void dsicm_power_off(struct panel_drv_data *ddata)
 
 	ddata->enabled = 0;
 	dsicm_set_idle_qos(ddata);
+	dsicm_set_l3_hold(ddata, false);
 }
 
 static int dsicm_panel_reset(struct panel_drv_data *ddata)
