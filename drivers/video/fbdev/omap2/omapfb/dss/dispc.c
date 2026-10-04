@@ -69,7 +69,7 @@ struct dispc_features {
 		u16 width, u16 height, u16 out_width, u16 out_height,
 		enum omap_color_mode color_mode, bool *five_taps,
 		int *x_predecim, int *y_predecim, int *decim_x, int *decim_y,
-		u16 pos_x, unsigned long *core_clk, bool mem_to_mem);
+		u16 pos_x, unsigned long *core_clk, bool mem_to_mem, bool manual);
 	unsigned long (*calc_core_clk) (unsigned long pclk,
 		u16 width, u16 height, u16 out_width, u16 out_height,
 		bool mem_to_mem);
@@ -2090,6 +2090,21 @@ static void calc_tiler_rotation_offset(u16 screen_width, u16 width,
  * This function is used to avoid synclosts in OMAP3, because of some
  * undocumented horizontal position and timing related limitations.
  */
+/*
+ * A manual-update display (DSI command mode: stall mode and FIFO handcheck) takes its pixels when it
+ * can: the horizontal blanking a scaler needs to refill its line buffers on a video-mode display
+ * doesn't apply, and its timings have none, so check_horiz_timing_omap3() refused every scaled plane
+ * on it. Nokia's N9 kernel skipped these checks for it ("Assume FIFO stall/handcheck saves the day",
+ * kernel-plus-harmattan dispc.c check_horiz_blanking(), check_horiz_timing()).
+ */
+static bool dispc_mgr_is_manual_update(enum omap_channel channel)
+{
+	struct omap_overlay_manager *mgr = omap_dss_get_overlay_manager(channel);
+	struct omap_dss_device *dssdev = mgr && mgr->output ? mgr->output->dst : NULL;
+
+	return dssdev && (dssdev->caps & OMAP_DSS_DISPLAY_CAP_MANUAL_UPDATE);
+}
+
 static int check_horiz_timing_omap3(unsigned long pclk, unsigned long lclk,
 		const struct omap_video_timings *t, u16 pos_x,
 		u16 width, u16 height, u16 out_width, u16 out_height,
@@ -2240,7 +2255,7 @@ static int dispc_ovl_calc_scaling_24xx(unsigned long pclk, unsigned long lclk,
 		u16 width, u16 height, u16 out_width, u16 out_height,
 		enum omap_color_mode color_mode, bool *five_taps,
 		int *x_predecim, int *y_predecim, int *decim_x, int *decim_y,
-		u16 pos_x, unsigned long *core_clk, bool mem_to_mem)
+		u16 pos_x, unsigned long *core_clk, bool mem_to_mem, bool manual)
 {
 	int error;
 	u16 in_width, in_height;
@@ -2286,7 +2301,7 @@ static int dispc_ovl_calc_scaling_34xx(unsigned long pclk, unsigned long lclk,
 		u16 width, u16 height, u16 out_width, u16 out_height,
 		enum omap_color_mode color_mode, bool *five_taps,
 		int *x_predecim, int *y_predecim, int *decim_x, int *decim_y,
-		u16 pos_x, unsigned long *core_clk, bool mem_to_mem)
+		u16 pos_x, unsigned long *core_clk, bool mem_to_mem, bool manual)
 {
 	int error;
 	u16 in_width, in_height;
@@ -2312,7 +2327,7 @@ again:
 					in_height, out_width, out_height,
 					mem_to_mem);
 
-		error = check_horiz_timing_omap3(pclk, lclk, mgr_timings,
+		error = !manual && check_horiz_timing_omap3(pclk, lclk, mgr_timings,
 				pos_x, in_width, in_height, out_width,
 				out_height, *five_taps);
 		if (error && *five_taps) {
@@ -2347,7 +2362,7 @@ again:
 		return -EINVAL;
 	}
 
-	if (check_horiz_timing_omap3(pclk, lclk, mgr_timings, pos_x, in_width,
+	if (!manual && check_horiz_timing_omap3(pclk, lclk, mgr_timings, pos_x, in_width,
 				in_height, out_width, out_height, *five_taps)) {
 			DSSERR("horizontal timing too tight\n");
 			return -EINVAL;
@@ -2371,7 +2386,7 @@ static int dispc_ovl_calc_scaling_44xx(unsigned long pclk, unsigned long lclk,
 		u16 width, u16 height, u16 out_width, u16 out_height,
 		enum omap_color_mode color_mode, bool *five_taps,
 		int *x_predecim, int *y_predecim, int *decim_x, int *decim_y,
-		u16 pos_x, unsigned long *core_clk, bool mem_to_mem)
+		u16 pos_x, unsigned long *core_clk, bool mem_to_mem, bool manual)
 {
 	u16 in_width, in_width_max;
 	int decim_x_min = *decim_x;
@@ -2417,7 +2432,7 @@ static int dispc_ovl_calc_scaling(unsigned long pclk, unsigned long lclk,
 		u16 width, u16 height, u16 out_width, u16 out_height,
 		enum omap_color_mode color_mode, bool *five_taps,
 		int *x_predecim, int *y_predecim, u16 pos_x,
-		enum omap_dss_rotation_type rotation_type, bool mem_to_mem)
+		enum omap_dss_rotation_type rotation_type, bool mem_to_mem, bool manual)
 {
 	const int maxdownscale = dss_feat_get_param_max(FEAT_PARAM_DOWNSCALE);
 	const int max_decim_limit = 16;
@@ -2466,7 +2481,7 @@ static int dispc_ovl_calc_scaling(unsigned long pclk, unsigned long lclk,
 	ret = dispc.feat->calc_scaling(pclk, lclk, mgr_timings, width, height,
 		out_width, out_height, color_mode, five_taps,
 		x_predecim, y_predecim, &decim_x, &decim_y, pos_x, &core_clk,
-		mem_to_mem);
+		mem_to_mem, manual);
 	if (ret)
 		return ret;
 
@@ -2534,7 +2549,7 @@ int dispc_ovl_check(enum omap_plane plane, enum omap_channel channel,
 	return dispc_ovl_calc_scaling(pclk, lclk, caps, timings, in_width,
 			in_height, out_width, out_height, oi->color_mode,
 			&five_taps, x_predecim, y_predecim, pos_x,
-			oi->rotation_type, false);
+			oi->rotation_type, false, dispc_mgr_is_manual_update(channel));
 }
 EXPORT_SYMBOL(dispc_ovl_check);
 
@@ -2545,7 +2560,7 @@ static int dispc_ovl_setup_common(enum omap_plane plane,
 		u8 rotation, bool mirror, u8 zorder, u8 pre_mult_alpha,
 		u8 global_alpha, enum omap_dss_rotation_type rotation_type,
 		bool replication, const struct omap_video_timings *mgr_timings,
-		bool mem_to_mem)
+		bool mem_to_mem, bool manual)
 {
 	bool five_taps = true;
 	bool fieldmode = false;
@@ -2603,7 +2618,7 @@ static int dispc_ovl_setup_common(enum omap_plane plane,
 	r = dispc_ovl_calc_scaling(pclk, lclk, caps, mgr_timings, in_width,
 			in_height, out_width, out_height, color_mode,
 			&five_taps, &x_predecim, &y_predecim, pos_x,
-			rotation_type, mem_to_mem);
+			rotation_type, mem_to_mem, manual);
 	if (r)
 		return r;
 
@@ -2752,7 +2767,8 @@ int dispc_ovl_setup(enum omap_plane plane, const struct omap_overlay_info *oi,
 		oi->screen_width, oi->pos_x, oi->pos_y, oi->width, oi->height,
 		oi->out_width, oi->out_height, oi->color_mode, oi->rotation,
 		oi->mirror, oi->zorder, oi->pre_mult_alpha, oi->global_alpha,
-		oi->rotation_type, replication, mgr_timings, mem_to_mem);
+		oi->rotation_type, replication, mgr_timings, mem_to_mem,
+		dispc_mgr_is_manual_update(channel));
 
 	return r;
 }
