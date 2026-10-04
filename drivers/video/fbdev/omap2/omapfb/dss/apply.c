@@ -955,8 +955,9 @@ static struct {
  * and the manager counts as updating until the second is done, so a flip made meanwhile (a pan) waits
  * for the next frame and the flip notifications (dss_run_notifiers) come once the frame is out, as
  * with Nokia's omap_dss_lock_cache(). The overlays' own settings are written again next update.
- * ponytail: only unrotated, unmirrored, unscaled overlays are cut (the GFX plane X draws in); any
- * other overlay shows only in the half it lies wholly in. Video playback (Xv) will need scaled cuts.
+ * Unrotated, unmirrored overlays are cut, scaled ones (Xv video) too, with their input columns cut
+ * in proportion as Nokia's configure_overlay() did; any other overlay shows only in the half it lies
+ * wholly in.
  */
 static void dss_mgr_start_update_region_compat(struct omap_overlay_manager *mgr, u16 x, u16 w,
 					       bool first)
@@ -1010,7 +1011,7 @@ static void dss_mgr_start_update_region_compat(struct omap_overlay_manager *mgr,
 		u16 ow = oi.out_width ? oi.out_width : oi.width;
 		u16 x0 = max_t(u16, oi.pos_x, x);
 		u16 x1 = min_t(u16, oi.pos_x + ow, x + w);
-		bool cut = ow == oi.width && oi.rotation == OMAP_DSS_ROT_0 && !oi.mirror;
+		bool cut = oi.rotation == OMAP_DSS_ROT_0 && !oi.mirror;
 		bool on = false;
 
 		if (!region_ovl[ovl->id].enabled)
@@ -1018,10 +1019,21 @@ static void dss_mgr_start_update_region_compat(struct omap_overlay_manager *mgr,
 
 		if (x0 < x1 && (cut || (x0 == oi.pos_x && x1 == oi.pos_x + ow))) {
 			if (cut) {
-				oi.paddr += (x0 - oi.pos_x) *
-					    (dispc_ovl_color_mode_bpp(oi.color_mode) / 8);
-				oi.width = x1 - x0;
-				oi.out_width = 0;
+				/* the input columns of output columns [x0, x1) */
+				u16 xd = (x0 - oi.pos_x) * oi.width / ow;
+				u16 iw = oi.width - xd - (oi.pos_x + ow - x1) * oi.width / ow;
+
+				/*
+				 * Scaled (Xv video), even, as Nokia's configure_overlay(): else
+				 * rounding repeats a column at the cut, a bar mid-screen
+				 */
+				if (ow != oi.width) {
+					iw &= ~1;
+					xd = ALIGN(xd, 2);
+				}
+				oi.paddr += xd * (dispc_ovl_color_mode_bpp(oi.color_mode) / 8);
+				oi.width = iw;
+				oi.out_width = x1 - x0;
 			}
 			oi.pos_x = x0 - x;
 			on = !dispc_ovl_setup(ovl->id, &oi,
