@@ -136,6 +136,12 @@ struct panel_drv_data {
 	ktime_t stats_last;
 	u32 stats[5], phase[4], late_starts;
 	/*
+	 * Halves out of their window (a tear, or the halves a frame apart): first halves that ended
+	 * after the scan came back to their rows, second halves whose timer found them not ready (out
+	 * a frame late), second halves still going at the next TE
+	 */
+	u32 half1_over, half2_missed, half2_over;
+	/*
 	 * A split update's frame latched when it's asked for (sysfs region_latch, as stock) or at its
 	 * first half; early_pans: frames a flip changed between the two (kept, or replaced unseen), and
 	 * blocked: updates that waited over 1 ms for the previous frame (X stalls meanwhile)
@@ -921,10 +927,12 @@ static ssize_t dsicm_update_stats_show(struct device *dev, struct device_attribu
 	u32 *p = ddata->phase;
 
 	return sysfs_emit(buf, "1:%u 2:%u 3:%u 4+:%u pauses:%u | requests at TE+ 0-1ms:%u 1-2ms:%u "
-			  "2-15ms:%u 15ms+:%u | late starts:%u | early pans:%u (%s) blocked:%u (%u ms)\n",
+			  "2-15ms:%u 15ms+:%u | late starts:%u | early pans:%u (%s) blocked:%u (%u ms) | "
+			  "halves late: 1st over %u, 2nd missed %u, 2nd over %u\n",
 			  n[1], n[2], n[3], n[4], n[0], p[0], p[1], p[2], p[3], ddata->late_starts,
 			  ddata->early_pans - ddata->early_pans_base,
-			  ddata->region_latch ? "kept" : "replaced", ddata->blocked, ddata->blocked_ms);
+			  ddata->region_latch ? "kept" : "replaced", ddata->blocked, ddata->blocked_ms,
+			  ddata->half1_over, ddata->half2_missed, ddata->half2_over);
 }
 
 /* Any write clears them */
@@ -939,6 +947,7 @@ static ssize_t dsicm_update_stats_store(struct device *dev, struct device_attrib
 	ddata->late_starts = 0;
 	ddata->early_pans_base = ddata->early_pans;
 	ddata->blocked = ddata->blocked_ms = 0;
+	ddata->half1_over = ddata->half2_missed = ddata->half2_over = 0;
 	mutex_unlock(&ddata->lock);
 	return count;
 }
@@ -1458,6 +1467,10 @@ static void dsicm_split_record(struct panel_drv_data *ddata, int half)
 	u32 us = ktime_us_delta(ktime_get(), ddata->split_t0);
 
 	ddata->split_us[half] = us;
+	if (half == 0 && ktime_us_delta(ktime_get(), ddata->te_last) > ddata->frame_us / 2)
+		ddata->half1_over++;
+	if (half == 1 && ktime_after(ddata->te_last, ddata->split_t0))
+		ddata->half2_over++;
 	/* a peak that fades by 1/32 a frame: one slow half (at boot) mustn't stop late starts for good */
 	ddata->split_max[half] = max(ddata->split_max[half] - ddata->split_max[half] / 32, us);
 }
@@ -1581,10 +1594,13 @@ static enum hrtimer_restart dsicm_split_timer(struct hrtimer *timer)
 {
 	struct panel_drv_data *ddata = container_of(timer, struct panel_drv_data, split_timer);
 
-	if (ddata->split_reverse)
+	if (ddata->split_reverse) {
+		if (atomic_read(&ddata->split_state) == DSICM_HALF1_ONGOING)
+			ddata->half2_missed++;
 		dsicm_split_start2(ddata);
-	else
+	} else {
 		dsicm_split_start1(ddata);
+	}
 	return HRTIMER_NORESTART;
 }
 
