@@ -4141,7 +4141,11 @@ static void update_cfs_group(struct sched_entity *se)
 	if (!gcfs_rq || !gcfs_rq->load.weight)
 		return;
 
-	shares = calc_group_shares(gcfs_rq);
+	/* One CPU: the group's share is all of its weight, as before 6.17 made SMP unconditional */
+	if (!IS_ENABLED(CONFIG_SMP))
+		shares = READ_ONCE(gcfs_rq->tg->shares);
+	else
+		shares = calc_group_shares(gcfs_rq);
 	if (unlikely(se->load.weight != shares))
 		reweight_entity(cfs_rq_of(se), se, shares);
 }
@@ -4903,8 +4907,18 @@ static void detach_entity_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 /* Update task and its cfs_rq load average */
 static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {
-	u64 now = cfs_rq_clock_pelt(cfs_rq);
+	u64 now;
 	int decayed;
+
+	/*
+	 * One CPU: no load tracking (nothing balances, and the group shares above don't use it), as
+	 * before 6.17 made SMP unconditional; only the cpufreq hook, which ondemand samples from.
+	 */
+	if (!IS_ENABLED(CONFIG_SMP)) {
+		cfs_rq_util_change(cfs_rq, 0);
+		return;
+	}
+	now = cfs_rq_clock_pelt(cfs_rq);
 
 	/*
 	 * Track task load average for carrying it to new CPU after migrated, and
@@ -4964,6 +4978,9 @@ static void remove_entity_load_avg(struct sched_entity *se)
 {
 	struct cfs_rq *cfs_rq = cfs_rq_of(se);
 	unsigned long flags;
+
+	if (!IS_ENABLED(CONFIG_SMP))	/* no load tracking on one CPU, see update_load_avg() */
+		return;
 
 	/*
 	 * tasks cannot exit without having gone through wake_up_new_task() ->
@@ -13104,6 +13121,9 @@ static int sched_balance_newidle(struct rq *this_rq, struct rq_flags *rf)
 	u64 t0, t1, curr_cost = 0;
 	struct sched_domain *sd;
 	int pulled_task = 0;
+
+	if (!IS_ENABLED(CONFIG_SMP))	/* one CPU: nothing to pull, as before 6.17 */
+		return 0;
 
 	update_misfit_status(NULL, this_rq);
 
