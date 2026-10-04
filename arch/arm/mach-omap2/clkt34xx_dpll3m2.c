@@ -312,6 +312,7 @@ static const struct file_operations l3_fops = {
 static int __init omap3_l3_policy_init(void)
 {
 	struct cpufreq_policy *policy;
+	struct voltagedomain *vdd2;
 	struct clk *m2, *dpll3;
 
 	/* SDRAM timings for both rates come from the board (sdram-nokia.c for the N9 and N950) */
@@ -332,6 +333,14 @@ static int __init omap3_l3_policy_init(void)
 		omap2_clk_deny_idle(dpll3);
 	l3_high = clk_get_rate(m2);
 	l3_low = l3_high / 2;
+	/*
+	 * VDD2 at OPP100's voltage through the voltage layer, which otherwise learns it only at the
+	 * first L3 change (VDD1's comes with cpufreq's first change): SmartReflex starts only at a
+	 * known voltage, and L3 can stay at OPP100 for good (USB's hold)
+	 */
+	vdd2 = voltdm_lookup("core");
+	if (vdd2)
+		voltdm_scale(vdd2, VDD2_OPP100_UV);
 	policy = cpufreq_cpu_get(0);
 	l3_cpu_high = !policy || policy->cur > policy->min;
 	if (policy)
