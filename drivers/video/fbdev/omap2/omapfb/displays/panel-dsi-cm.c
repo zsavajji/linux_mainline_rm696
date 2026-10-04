@@ -138,9 +138,10 @@ struct panel_drv_data {
 	/*
 	 * Halves out of their window (a tear, or the halves a frame apart): first halves that ended
 	 * after the scan came back to their rows, second halves whose timer found them not ready (out
-	 * a frame late), second halves still going at the next TE
+	 * late in the same frame if they still fit, else a frame late), second halves still going at
+	 * the next TE
 	 */
-	u32 half1_over, half2_missed, half2_over;
+	u32 half1_over, half2_missed, half2_late, half2_over;
 	/*
 	 * A split update's frame latched when it's asked for (sysfs region_latch, as stock) or at its
 	 * first half; early_pans: frames a flip changed between the two (kept, or replaced unseen), and
@@ -928,11 +929,11 @@ static ssize_t dsicm_update_stats_show(struct device *dev, struct device_attribu
 
 	return sysfs_emit(buf, "1:%u 2:%u 3:%u 4+:%u pauses:%u | requests at TE+ 0-1ms:%u 1-2ms:%u "
 			  "2-15ms:%u 15ms+:%u | late starts:%u | early pans:%u (%s) blocked:%u (%u ms) | "
-			  "halves late: 1st over %u, 2nd missed %u, 2nd over %u\n",
+			  "halves late: 1st over %u, 2nd missed %u (out late %u), 2nd over %u\n",
 			  n[1], n[2], n[3], n[4], n[0], p[0], p[1], p[2], p[3], ddata->late_starts,
 			  ddata->early_pans - ddata->early_pans_base,
 			  ddata->region_latch ? "kept" : "replaced", ddata->blocked, ddata->blocked_ms,
-			  ddata->half1_over, ddata->half2_missed, ddata->half2_over);
+			  ddata->half1_over, ddata->half2_missed, ddata->half2_late, ddata->half2_over);
 }
 
 /* Any write clears them */
@@ -947,7 +948,7 @@ static ssize_t dsicm_update_stats_store(struct device *dev, struct device_attrib
 	ddata->late_starts = 0;
 	ddata->early_pans_base = ddata->early_pans;
 	ddata->blocked = ddata->blocked_ms = 0;
-	ddata->half1_over = ddata->half2_missed = ddata->half2_over = 0;
+	ddata->half1_over = ddata->half2_missed = ddata->half2_late = ddata->half2_over = 0;
 	mutex_unlock(&ddata->lock);
 	return count;
 }
@@ -1489,6 +1490,8 @@ static void dsicm_split_done2(int err, void *data)
 	ddata->in->ops.dsi->bus_unlock(ddata->in);
 }
 
+static void dsicm_split_late_half2(struct panel_drv_data *ddata);
+
 /* After the first half: the second half's window (a DCS write, which can sleep), then its TE */
 static void dsicm_split_work(struct work_struct *work)
 {
@@ -1501,6 +1504,7 @@ static void dsicm_split_work(struct work_struct *work)
 		return;
 	}
 	atomic_set(&ddata->split_state, DSICM_HALF2_WAIT);
+	dsicm_split_late_half2(ddata);
 }
 
 static void dsicm_split_done1(int err, void *data)
@@ -1588,6 +1592,23 @@ static void dsicm_split_late_start(struct panel_drv_data *ddata)
 		return;
 	ddata->late_starts++;
 	dsicm_split_start1(ddata);
+}
+
+/*
+ * The second half's window written only after its timer fired (a first half started late, or the
+ * window's DCS write ran late): out now if it still ends before the next TE, where the scan comes
+ * back to its rows, rather than at the next frame's timer with the halves a frame apart (the "half
+ * screen tearing" seen with video, update_stats "2nd missed"). The same margin as a late start.
+ */
+static void dsicm_split_late_half2(struct panel_drv_data *ddata)
+{
+	u32 us = ktime_us_delta(ktime_get(), ddata->te_last);
+
+	if (!ddata->split_reverse || us < dsicm_split_delay(ddata) ||
+	    us + ddata->split_max[1] + 300 >= ddata->frame_us)
+		return;
+	ddata->half2_late++;
+	dsicm_split_start2(ddata);
 }
 
 static enum hrtimer_restart dsicm_split_timer(struct hrtimer *timer)
