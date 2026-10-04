@@ -130,6 +130,17 @@
 			alignment = <0x100000>;
 			no-map;
 		};
+
+		/*
+		 * omapfb's video memory (DSS memory-region below), stock's VRAM: board-rm696-video.c
+		 * rm696_video_mem_init(), GFX 856x512 16 bpp x 3 + VID1/2 1280x720 16 bpp x 6 (13.05 MiB);
+		 * 14 MiB, so the Xv buffers also fit next to fb0 at the 3 MiB of omap2fb.vram=0:3M
+		 */
+		omapfb_vram: omapfb-vram {
+			size = <0xe00000>;
+			alignment = <0x100000>;
+			no-map;
+		};
 	};
 
 	/*
@@ -151,6 +162,7 @@
 	status = "okay";
 
 	vdda_video-supply = <&vdac>;
+	memory-region = <&omapfb_vram>;
 };
 
 /*
