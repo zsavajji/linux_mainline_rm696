@@ -14,6 +14,10 @@
 #include <linux/slab.h>
 #include <linux/fb.h>
 #include <linux/dma-mapping.h>
+#include <linux/genalloc.h>
+#include <linux/io.h>
+#include <linux/of.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/vmalloc.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
@@ -1295,6 +1299,37 @@ static const struct fb_ops omapfb_ops = {
 	/*.fb_write	= omapfb_write,*/
 };
 
+/*
+ * Video memory from a carveout, as Nokia's boards reserved it at boot (omap_vram_set_sdram_vram();
+ * the N9's held its GFX framebuffers and Xv's video planes): the DSS node's memory-region, if it
+ * has one, else the DMA API (CMA). Harmattan's X asks for 10.5 MiB of Xv buffers when a video
+ * starts, and CMA fails that while any page in its few aligned windows is pinned (pvr wraps of
+ * X's shared memory hold theirs for good).
+ */
+static struct gen_pool *omapfb_vram;
+
+static void omapfb_init_vram(struct device *dev)
+{
+	struct device_node *np = of_find_compatible_node(NULL, NULL, "ti,omap3-dss");
+	struct gen_pool *pool;
+	struct resource res;
+	int r;
+
+	omapfb_vram = NULL;	/* a previous probe's pool went with its device */
+	r = np ? of_reserved_mem_region_to_resource(np, 0, &res) : -ENODEV;
+	of_node_put(np);
+	if (r)
+		return;
+
+	pool = devm_gen_pool_create(dev, PAGE_SHIFT, -1, "vram");
+	if (IS_ERR(pool) || gen_pool_add(pool, res.start, resource_size(&res), -1)) {
+		dev_err(dev, "VRAM %pR unusable, allocating from CMA\n", &res);
+		return;
+	}
+	omapfb_vram = pool;
+	dev_info(dev, "VRAM %pR\n", &res);
+}
+
 static void omapfb_free_fbmem(struct fb_info *fbi)
 {
 	struct omapfb_info *ofbi = FB2OFB(fbi);
@@ -1318,8 +1353,13 @@ static void omapfb_free_fbmem(struct fb_info *fbi)
 		omap_vrfb_release_ctx(&rg->vrfb);
 	}
 
-	dma_free_attrs(fbdev->dev, rg->size, rg->token, rg->dma_handle,
-			rg->attrs);
+	if (omapfb_vram) {
+		memunmap(rg->token);
+		gen_pool_free(omapfb_vram, rg->dma_handle, rg->size);
+	} else {
+		dma_free_attrs(fbdev->dev, rg->size, rg->token, rg->dma_handle,
+				rg->attrs);
+	}
 
 	rg->token = NULL;
 	rg->vaddr = NULL;
@@ -1380,8 +1420,16 @@ static int omapfb_alloc_fbmem(struct fb_info *fbi, unsigned long size,
 
 	DBG("allocating %lu bytes for fb %d\n", size, ofbi->id);
 
-	token = dma_alloc_attrs(fbdev->dev, size, &dma_handle,
-			GFP_KERNEL, attrs);
+	if (omapfb_vram) {
+		/* the carveout is never in the linear map: write-combined, as dma_alloc_attrs() */
+		dma_handle = gen_pool_alloc(omapfb_vram, size);
+		token = dma_handle ? memremap(dma_handle, size, MEMREMAP_WC) : NULL;
+		if (dma_handle && !token)
+			gen_pool_free(omapfb_vram, dma_handle, size);
+	} else {
+		token = dma_alloc_attrs(fbdev->dev, size, &dma_handle,
+				GFP_KERNEL, attrs);
+	}
 
 	if (token == NULL) {
 		dev_err(fbdev->dev, "failed to allocate framebuffer\n");
@@ -2490,6 +2538,7 @@ static int omapfb_probe(struct platform_device *pdev)
 	mutex_init(&fbdev->mtx);
 
 	fbdev->dev = &pdev->dev;
+	omapfb_init_vram(fbdev->dev);
 	platform_set_drvdata(pdev, fbdev);
 
 	fbdev->num_displays = 0;
