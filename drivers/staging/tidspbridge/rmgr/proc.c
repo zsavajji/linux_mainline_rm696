@@ -19,6 +19,7 @@
 #include <linux/types.h>
 /* ------------------------------------ Host OS */
 #include <linux/dma-mapping.h>
+#include <linux/highmem.h>
 #include <linux/scatterlist.h>
 #include <dspbridge/host_os.h>
 
@@ -817,24 +818,41 @@ err_out:
  * and expects the cache operation done when the call returns: Nokia's driver did it right there
  * on the user range, holding only mmap_sem (its proc_memory_sync()). The v3.16 begin-DMA path
  * waited for proc_lock, which every map holds for milliseconds (avg 620 us, stock's 10 us):
- * take the range's pages and clean and/or invalidate exactly the range.
+ * take the range's pages and clean and/or invalidate exactly the range, one pass over it as
+ * Nokia's mem_flush_cache() (dmac_flush_range(), dmac_inv_range()); a DMA map and unmap made two.
  */
 static int proc_memory_sync(void *pmpu_addr, u32 size, enum dma_data_direction dir)
 {
 	unsigned long a = (unsigned long)pmpu_addr, end = a + size;
-	struct page *page;
-	dma_addr_t h;
-	u32 len;
+	struct page *pages[16];
+	int n, i;
 
 	while (a < end) {
-		len = min_t(unsigned long, PAGE_SIZE - offset_in_page(a), end - a);
-		if (get_user_pages_fast(a & PAGE_MASK, 1, 0, &page) != 1)
+		n = min_t(unsigned long, ARRAY_SIZE(pages),
+			  (PAGE_ALIGN(end) - (a & PAGE_MASK)) >> PAGE_SHIFT);
+		n = get_user_pages_fast(a & PAGE_MASK, n, 0, pages);
+		if (n <= 0)
 			return -EFAULT;
-		h = dma_map_page(bridge, page, offset_in_page(a), len, dir);
-		if (!dma_mapping_error(bridge, h))
-			dma_unmap_page(bridge, h, len, dir);
-		put_page(page);
-		a += len;
+		for (i = 0; i < n; i++) {
+			u32 off = offset_in_page(a);
+			u32 len = min_t(unsigned long, PAGE_SIZE - off, end - a);
+
+			if (dir == DMA_BIDIRECTIONAL) {
+				void *kaddr = kmap_local_page(pages[i]);
+
+				__cpuc_flush_dcache_area(kaddr + off, len);
+				kunmap_local(kaddr);
+			} else {
+				/* the unmap's invalidate only */
+				dma_addr_t h = dma_map_page_attrs(bridge, pages[i], off, len, dir,
+								  DMA_ATTR_SKIP_CPU_SYNC);
+
+				if (!dma_mapping_error(bridge, h))
+					dma_unmap_page(bridge, h, len, dir);
+			}
+			put_page(pages[i]);
+			a += len;
+		}
 	}
 	return 0;
 }
