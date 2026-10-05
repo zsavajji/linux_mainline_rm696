@@ -384,6 +384,22 @@ int sm_interrupt_dsp(struct bridge_dev_context *dev_context, u16 mb_val)
 	if (!resources)
 		return -EPERM;
 
+	/*
+	 * Nothing for a DSP in another state, as Nokia's wake_dsp() refused ("unexpected state")
+	 * before sm_interrupt_dsp() sent anything: a crashed DSP (BRD_ERROR, until the recovery
+	 * reloads it) never reads its FIFO, so its messages would only wait in the mailbox queue
+	 */
+	switch (dev_context->brd_state) {
+	case BRD_STOPPED:
+	case BRD_RUNNING:
+	case BRD_RETENTION:
+	case BRD_HIBERNATION:
+	case BRD_DSP_HIBERNATION:
+		break;
+	default:
+		return -EPERM;
+	}
+
 	if (dev_context->brd_state == BRD_DSP_HIBERNATION ||
 	    dev_context->brd_state == BRD_HIBERNATION) {
 #ifdef CONFIG_TIDSPBRIDGE_DVFS
@@ -458,7 +474,8 @@ int sm_interrupt_dsp(struct bridge_dev_context *dev_context, u16 mb_val)
 	status = mbox_send_message(dev_context->mbox,
 				   (void *)(uintptr_t)mb_val);
 	if (status < 0)
-		pr_err("mbox_send_message Fail and status = %d\n", status);
+		pr_err("mbox_send_message Fail and status = %d (message 0x%x, board state %u)\n",
+		       status, mb_val, dev_context->brd_state);
 	/*
 	 * As Nokia's mailbox: the messages go straight into the FIFO, no TX interrupt and mailbox
 	 * thread per message (knows_txdone); only a full FIFO waits for the interrupt
