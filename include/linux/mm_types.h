@@ -964,6 +964,12 @@ struct mm_struct {
 
 		unsigned long mmap_base;	/* base of mmap area */
 		unsigned long mmap_legacy_base;	/* base of mmap area in bottom-up allocations */
+		/*
+		 * Where the next top-down search for a free area tries first
+		 * (unmapped_area_topdown()): under the last area it found, or
+		 * the top of the last hole munmap() made. 0: mmap_base.
+		 */
+		unsigned long free_area_hint;
 #ifdef CONFIG_HAVE_ARCH_COMPAT_MMAP_BASES
 		/* Base addresses for compatible mmap() */
 		unsigned long mmap_compat_base;

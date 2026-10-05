@@ -1310,6 +1310,13 @@ static void vms_complete_munmap_vmas(struct vma_munmap_struct *vms,
 	mm = current->mm;
 	mm->map_count -= vms->vma_count;
 	mm->locked_vm -= vms->locked_vm;
+	/* The top of the hole, for the next top-down search to try first */
+	if (vms->nr_pages) {
+		unsigned long top = vms->next ? vms->next->vm_start : ULONG_MAX;
+
+		if (top > mm->free_area_hint)
+			mm->free_area_hint = top;
+	}
 	if (vms->unlock)
 		mmap_write_downgrade(mm);
 
@@ -2944,7 +2951,8 @@ unsigned long unmapped_area_topdown(struct vm_unmapped_area_info *info)
 	unsigned long length, gap, gap_end;
 	unsigned long low_limit, high_limit;
 	struct vm_area_struct *tmp;
-	VMA_ITERATOR(vmi, current->mm, 0);
+	struct mm_struct *mm = current->mm;
+	VMA_ITERATOR(vmi, mm, 0);
 
 	/* Adjust search length to account for worst case alignment overhead */
 	length = info->length + info->align_mask + info->start_gap;
@@ -2955,6 +2963,29 @@ unsigned long unmapped_area_topdown(struct vm_unmapped_area_info *info)
 	if (low_limit < mmap_min_addr)
 		low_limit = mmap_min_addr;
 	high_limit = info->high_limit;
+
+	/*
+	 * First the area right under the hint, as Linux 2.6.32's
+	 * free_area_cache: libraries mapped one under the other, or a mapping
+	 * unmapped and mapped again, find it free, and one VMA lookup says
+	 * so. The gap tree walk below takes far longer on 32-bit: it scans
+	 * the top leaf every time, the stack's reserve above mmap_base being
+	 * a gap too big to skip. The area may not be the highest that fits.
+	 */
+	if (!info->align_mask && !info->start_gap &&
+	    !IS_ENABLED(CONFIG_STACK_GROWSUP)) {
+		gap_end = min(mm->free_area_hint ?: high_limit, high_limit);
+		if (gap_end > low_limit && gap_end - low_limit >= length) {
+			gap = gap_end - length;
+			vma_iter_set(&vmi, gap);
+			tmp = vma_find(&vmi, ULONG_MAX);
+			if (!tmp || vm_start_gap(tmp) >= gap_end) {
+				mm->free_area_hint = gap;
+				return gap;
+			}
+			vma_iter_reset(&vmi);
+		}
+	}
 retry:
 	if (vma_iter_area_highest(&vmi, low_limit, high_limit, length))
 		return -ENOMEM;
@@ -2978,6 +3009,7 @@ retry:
 		}
 	}
 
+	mm->free_area_hint = gap;
 	return gap;
 }
 
