@@ -459,6 +459,11 @@ int sm_interrupt_dsp(struct bridge_dev_context *dev_context, u16 mb_val)
 				   (void *)(uintptr_t)mb_val);
 	if (status < 0)
 		pr_err("mbox_send_message Fail and status = %d\n", status);
+	/*
+	 * As Nokia's mailbox: the messages go straight into the FIFO, no TX interrupt and mailbox
+	 * thread per message (knows_txdone); only a full FIFO waits for the interrupt
+	 */
+	mbox_flush(dev_context->mbox, 0);
 
 	return 0;
 }

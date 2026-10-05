@@ -573,6 +573,7 @@ static int bridge_brd_start(struct bridge_dev_context *dev_ctxt,
 		dev_context->mbox_client.dev = bridge;
 		dev_context->mbox_client.rx_callback = io_mbox_msg;
 		dev_context->mbox_client.tx_block = false;
+		dev_context->mbox_client.knows_txdone = true;	/* flushes each send */
 		dev_context->mbox = mbox_request_channel_byname(
 					&dev_context->mbox_client, "dsp");
 		if (IS_ERR(dev_context->mbox)) {
