@@ -1087,6 +1087,11 @@ choice
 config HZ_100
 	bool "100 Hz"
 
+config HZ_128
+	bool "128 Hz"
+	help
+	  A power of two: a whole number of a 32768 Hz timer's cycles per tick.
+
 config HZ_200
 	bool "200 Hz"
 
@@ -1108,6 +1113,7 @@ config HZ
 	int
 	default HZ_FIXED if HZ_FIXED != 0
 	default 100 if HZ_100
+	default 128 if HZ_128
 	default 200 if HZ_200
 	default 250 if HZ_250
 	default 300 if HZ_300
