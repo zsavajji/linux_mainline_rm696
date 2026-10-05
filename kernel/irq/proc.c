@@ -491,25 +491,30 @@ int show_interrupts(struct seq_file *p, void *v)
 	seq_putc(p, ' ');
 
 	guard(raw_spinlock_irq)(&desc->lock);
-	if (desc->irq_data.chip) {
-		if (desc->irq_data.chip->irq_print_chip)
-			desc->irq_data.chip->irq_print_chip(&desc->irq_data, p);
-		else if (desc->irq_data.chip->name)
-			seq_printf(p, "%8s", desc->irq_data.chip->name);
-		else
-			seq_printf(p, "%8s", "-");
+	if (desc->proc_chip_label) {
+		/* Linux 2.6.32's line: the label, then the handlers */
+		seq_printf(p, "%10s", desc->proc_chip_label);
 	} else {
-		seq_printf(p, "%8s", "None");
-	}
-	if (desc->irq_data.domain)
-		seq_printf(p, " %*lu", prec, desc->irq_data.hwirq);
-	else
-		seq_printf(p, " %*s", prec, "");
+		if (desc->irq_data.chip) {
+			if (desc->irq_data.chip->irq_print_chip)
+				desc->irq_data.chip->irq_print_chip(&desc->irq_data, p);
+			else if (desc->irq_data.chip->name)
+				seq_printf(p, "%8s", desc->irq_data.chip->name);
+			else
+				seq_printf(p, "%8s", "-");
+		} else {
+			seq_printf(p, "%8s", "None");
+		}
+		if (desc->irq_data.domain)
+			seq_printf(p, " %*lu", prec, desc->irq_data.hwirq);
+		else
+			seq_printf(p, " %*s", prec, "");
 #ifdef CONFIG_GENERIC_IRQ_SHOW_LEVEL
-	seq_printf(p, " %-8s", irqd_is_level_type(&desc->irq_data) ? "Level" : "Edge");
+		seq_printf(p, " %-8s", irqd_is_level_type(&desc->irq_data) ? "Level" : "Edge");
 #endif
-	if (desc->name)
-		seq_printf(p, "-%-8s", desc->name);
+		if (desc->name)
+			seq_printf(p, "-%-8s", desc->name);
+	}
 
 	action = desc->action;
 	if (action) {

@@ -131,6 +131,24 @@ int irq_set_chip_data(unsigned int irq, void *data)
 }
 EXPORT_SYMBOL(irq_set_chip_data);
 
+/**
+ * irq_set_proc_chip_label - print an irq's /proc/interrupts line as Linux 2.6.32 did
+ * @irq:	Interrupt number
+ * @label:	The interrupt controller's name in that line, NULL for the normal line
+ *
+ * The line then holds the counts, @label and the handlers' names, without the
+ * hwirq, trigger and flow columns, for old userspace that parses it.
+ */
+int irq_set_proc_chip_label(unsigned int irq, const char *label)
+{
+	scoped_irqdesc_get_and_lock(irq, 0) {
+		scoped_irqdesc->proc_chip_label = label;
+		return 0;
+	}
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(irq_set_proc_chip_label);
+
 struct irq_data *irq_get_irq_data(unsigned int irq)
 {
 	struct irq_desc *desc = irq_to_desc(irq);

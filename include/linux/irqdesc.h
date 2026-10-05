@@ -114,6 +114,7 @@ struct irq_desc {
 	int			parent_irq;
 	struct module		*owner;
 	const char		*name;
+	const char		*proc_chip_label;
 #ifdef CONFIG_HARDIRQS_SW_RESEND
 	struct hlist_node	resend_node;
 #endif
