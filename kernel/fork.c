@@ -2422,9 +2422,15 @@ __latent_entropy struct task_struct *copy_process(
 	if (pidfile)
 		fd_install(pidfd, pidfile);
 
-	proc_fork_connector(p);
 	sched_post_fork(p);
 	cgroup_post_fork(p, args);
+	/*
+	 * Only after cgroup_post_fork() has dropped cgroup_threadgroup_rwsem: a
+	 * listener the event wakes (Harmattan's ohmd moves each new process to
+	 * a cgroup) preempts us, and its migration would block on that rwsem
+	 * until we finish the fork.
+	 */
+	proc_fork_connector(p);
 	perf_event_fork(p);
 
 	trace_task_newtask(p, clone_flags);
