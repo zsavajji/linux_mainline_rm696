@@ -156,12 +156,18 @@ static int nokia_modem_probe(struct device *dev)
 	tasklet_init(&modem->nokia_modem_rst_ind_tasklet,
 			do_nokia_modem_rst_ind_tasklet, (unsigned long)modem);
 	err = devm_request_irq(dev, irq, nokia_modem_rst_ind_isr,
-				pflags, "modem_rst_ind", modem);
+				pflags, "cmt_rst_ind", modem);
 	if (err < 0) {
 		dev_err(dev, "Request rst_ind irq(%d) failed (flags %d)\n",
 								irq, pflags);
 		return err;
 	}
+	/*
+	 * Harmattan's csd counts modem resets from this interrupt's line in
+	 * /proc/interrupts, which it parses as Nokia's kernel printed it:
+	 * "%*d: %u%*[ ]GPIO%*[ ]cmt_rst_ind%c"
+	 */
+	irq_set_proc_chip_label(irq, "GPIO");
 	enable_irq_wake(irq);
 
 	if (pm) {
