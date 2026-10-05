@@ -1218,6 +1218,17 @@ int node_create(struct node_object *hnode)
 			}
 		}
 	}
+	/*
+	 * If node_env is not null, node_delete will take care of removing the
+	 * library along with deinitializing any other resources in the dsp.
+	 * Otherwise node_delete skips the node, so unload it here: a library
+	 * left loaded stays in the code manager's target across a DSP reload,
+	 * and later nodes would run it at addresses the new loader hands out.
+	 */
+	if (status < 0 && !hnode->node_env && hnode->loaded) {
+		hnode_mgr->nldr_fxns.unload(hnode->nldr_node_obj, NLDR_CREATE);
+		hnode->loaded = false;
+	}
 	/*  Phase II/Overlays: Create, execute, delete phases  possibly in
 	 *  different files/sections. */
 	if (hnode->loaded && hnode->phase_split) {
