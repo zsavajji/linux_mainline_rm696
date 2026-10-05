@@ -106,7 +106,7 @@ struct mbox_controller {
  * REVISIT: If too many platforms see the "Try increasing MBOX_TX_QUEUE_LEN"
  * print, it needs to be taken from config option or somesuch.
  */
-#define MBOX_TX_QUEUE_LEN	20
+#define MBOX_TX_QUEUE_LEN	64	/* 20 in mainline; 64 as Nokia's OMAP mailbox queue */
 
 /**
  * struct mbox_chan - s/w representation of a communication chan
