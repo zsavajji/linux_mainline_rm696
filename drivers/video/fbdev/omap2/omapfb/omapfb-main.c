@@ -1825,6 +1825,16 @@ static int omapfb_fb_init(struct omapfb2_device *fbdev, struct fb_info *fbi)
 				return -EINVAL;
 			}
 		}
+
+		/*
+		 * sgx: the virtual frame as stock's N9 framebuffer (board-rm696-video.c): 856 wide
+		 * (854 rounded up to 8) and as many rows as the memory holds (3 x 512 in stock's
+		 * 2629632 bytes, omap2fb.vram). It is what Harmattan's X sets up, so X keeps what
+		 * fb0 shows (preinit's boot image) instead of new, black memory
+		 */
+		var->xres_virtual = ALIGN(var->xres, 8);
+		var->yres_virtual = max_t(u32, var->yres, ofbi->region->size /
+					  (var->xres_virtual * var->bits_per_pixel / 8));
 	} else {
 		/* if there's no display, let's just guess some basic values */
 		var->xres = 320;
