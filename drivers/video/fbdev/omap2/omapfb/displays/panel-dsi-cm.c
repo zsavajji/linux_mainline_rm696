@@ -1983,6 +1983,19 @@ static int dsicm_set_mirror(struct omap_dss_device *dssdev, bool enable)
 	return enable ? -EINVAL : 0;
 }
 
+/*
+ * sgx: the N9's framebuffer is RGB565 from boot, as stock's (board-rm696-video.c): preinit's
+ * show_png draws its boot image only on a 16-bit framebuffer, and at the 32 bits omapfb chose
+ * for a 24-bit panel the screen kept NOLO's logo until X's first frame, then stayed black until
+ * X's first picture (boots 172-176). The DSS converts to the panel's 24 bits.
+ */
+static int dsicm_get_recommended_bpp(struct omap_dss_device *dssdev)
+{
+	struct panel_drv_data *ddata = to_panel_data(dssdev);
+
+	return ddata->pyrenees ? 16 : omapdss_default_get_recommended_bpp(dssdev);
+}
+
 static struct omap_dss_driver dsicm_ops = {
 	.connect	= dsicm_connect,
 	.disconnect	= dsicm_disconnect,
@@ -1994,7 +2007,7 @@ static struct omap_dss_driver dsicm_ops = {
 	.sync		= dsicm_sync,
 
 	.get_resolution	= dsicm_get_resolution,
-	.get_recommended_bpp = omapdss_default_get_recommended_bpp,
+	.get_recommended_bpp = dsicm_get_recommended_bpp,
 
 	.enable_te	= dsicm_enable_te,
 	.get_te		= dsicm_get_te,
