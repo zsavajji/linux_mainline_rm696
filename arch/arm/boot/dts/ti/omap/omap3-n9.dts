@@ -338,6 +338,16 @@
 	};
 };
 
+/*
+ * The CPU's temperature every 5 s instead of every second: a read of the OMAP3630's bandgap (mainline
+ * marks it unreliable) busy-waits for its conversion, up to 2.5 ms when that times out, which it
+ * does a few times a boot; stock read no CPU sensor. Above the passive trip (80 C) the zone still
+ * polls every 250 ms.
+ */
+&cpu_thermal {
+	polling-delay = <5000>;
+};
+
 /* The touchscreen, as stock's board file (board-rm696-peripherals.c): IRQ GPIO 61, reset GPIO 81 */
 &i2c2 {
 	touchscreen@4b {
