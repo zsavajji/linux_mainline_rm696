@@ -27,7 +27,6 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/cpuidle.h>
-#include <linux/power/smartreflex.h>
 
 #include <trace/events/power.h>
 
@@ -189,7 +188,6 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	int per_next_state = PWRDM_POWER_ON;
 	int core_next_state = PWRDM_POWER_ON;
 	u32 sdrc_pwr = 0;
-	bool sr_vdd1, sr_vdd2;
 	int error;
 
 	mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
@@ -224,17 +222,6 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		if (error)
 			return;
 	}
-
-	/*
-	 * SmartReflex stops while the domains of its VDD sleep, as in Nokia's N9 kernel. With CORE
-	 * asleep the VC may take both VDDs to their retention voltage and back to its ON (nominal)
-	 * one, so they are forced to that first: then the VP's voltage stays the VDD's. With only
-	 * the MPU asleep VDD1 keeps the voltage SR gave it.
-	 */
-	sr_vdd1 = mpu_next_state <= PWRDM_POWER_RET &&
-		  omap_sr_idle_pause(mpu_pwrdm->voltdm.ptr, core_next_state <= PWRDM_POWER_RET);
-	sr_vdd2 = core_next_state <= PWRDM_POWER_RET &&
-		  omap_sr_idle_pause(core_pwrdm->voltdm.ptr, true);
 
 	/* CORE */
 	if (core_next_state < PWRDM_POWER_ON) {
@@ -302,11 +289,6 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		 */
 		omap3_intc_resume_idle();
 	}
-
-	if (sr_vdd2)
-		omap_sr_idle_resume(core_pwrdm->voltdm.ptr);
-	if (sr_vdd1)
-		omap_sr_idle_resume(mpu_pwrdm->voltdm.ptr);
 
 	pwrdm_post_transition(NULL);
 

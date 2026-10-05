@@ -216,9 +216,8 @@ void omap_vp_enable(struct voltagedomain *voltdm)
 		return;
 
 	/*
-	 * From the voltage the VP last sent: still the VDD's after SmartReflex paused for idle
-	 * (omap_sr_idle_pause()), and the nominal one after a force update. The nominal one if
-	 * it never sent any.
+	 * From the voltage the VP last sent, the one the last force update set; the nominal one
+	 * if it never sent any.
 	 */
 	volt = voltdm->read(vp->voltage) & vp->common->vpvoltage_mask;
 	volt = volt ? voltdm->pmic->vsel_to_uv(volt) : voltdm_get_voltage(voltdm);
