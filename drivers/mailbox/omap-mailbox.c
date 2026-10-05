@@ -195,11 +195,16 @@ static void omap_mbox_disable_irq(struct omap_mbox *mbox, omap_mbox_irq_t irq)
 /*
  * Mailbox interrupt handler
  */
+static int omap_mbox_chan_flush(struct mbox_chan *chan, unsigned long timeout);
+
 static void __mbox_tx_interrupt(struct omap_mbox *mbox)
 {
 	omap_mbox_disable_irq(mbox, IRQ_TX);
 	ack_mbox_irq(mbox, IRQ_TX);
 	mbox_chan_txdone(mbox->chan, 0);
+	/* a client that flushes gets no interrupt per message: finish what the full FIFO held back */
+	if (mbox->chan->cl && mbox->chan->cl->knows_txdone)
+		omap_mbox_chan_flush(mbox->chan, 0);
 }
 
 static void __mbox_rx_interrupt(struct omap_mbox *mbox)
@@ -306,8 +311,28 @@ static int omap_mbox_chan_send(struct omap_mbox *mbox, u32 msg)
 
 	mbox_fifo_write(mbox, msg);
 
-	/* always enable the interrupt */
-	omap_mbox_enable_irq(mbox, IRQ_TX);
+	/* a client that flushes (knows_txdone) needs no interrupt while the FIFO has room */
+	if (!mbox->chan->cl->knows_txdone)
+		omap_mbox_enable_irq(mbox, IRQ_TX);
+	return 0;
+}
+
+/*
+ * For clients that send from atomic context and can't wait for the TX interrupt and a thread switch
+ * per message: a sent message is in the FIFO, so it's done while the FIFO has room (what the TX
+ * interrupt would tell). A full FIFO is left to the interrupt.
+ */
+static int omap_mbox_chan_flush(struct mbox_chan *chan, unsigned long timeout)
+{
+	struct omap_mbox *mbox = chan->con_priv;
+
+	while (chan->active_req != MBOX_NO_MSG) {
+		if (mbox_fifo_full(mbox)) {
+			omap_mbox_enable_irq(mbox, IRQ_TX);
+			break;
+		}
+		mbox_chan_txdone(chan, 0);
+	}
 	return 0;
 }
 
@@ -331,6 +356,7 @@ static int omap_mbox_chan_send_data(struct mbox_chan *chan, void *data)
 static const struct mbox_chan_ops omap_mbox_chan_ops = {
 	.startup        = omap_mbox_chan_startup,
 	.send_data      = omap_mbox_chan_send_data,
+	.flush          = omap_mbox_chan_flush,
 	.shutdown       = omap_mbox_chan_shutdown,
 };
 
