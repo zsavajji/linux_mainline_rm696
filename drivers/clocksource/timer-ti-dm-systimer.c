@@ -278,6 +278,27 @@ static void __init dmtimer_systimer_assign_alwon(void)
 	} else {
 		clocksource = pa;
 		clockevent = DMTIMER_INST_DONT_CARE;
+		return;
+	}
+
+	/*
+	 * Unless the board names one (ti,timer-clocksource): the 32 KiHz counter sits on a slow
+	 * interconnect on some SoCs (omap3: the wakeup L4, ~780 ns a read at 1 GHz), and a timer
+	 * clocked faster also resolves time finer
+	 */
+	for_each_matching_node(np, dmtimer_match_table) {
+		struct resource res;
+
+		if (!dmtimer_is_preferred(np) ||
+		    !of_property_read_bool(np, "ti,timer-clocksource"))
+			continue;
+
+		if (of_address_to_resource(np, 0, &res))
+			continue;
+
+		clocksource = res.start;
+		of_node_put(np);
+		break;
 	}
 }
 
@@ -830,7 +851,7 @@ static int __init dmtimer_systimer_init(struct device_node *np)
 	if (!pa)
 		return -EINVAL;
 
-	if (counter_32k <= 0 && clocksource == pa)
+	if (clocksource && clocksource == pa)
 		return dmtimer_clocksource_init(np);
 
 	if (clockevent == pa)

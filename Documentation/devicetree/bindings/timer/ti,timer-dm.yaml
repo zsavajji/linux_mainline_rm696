@@ -79,6 +79,12 @@ properties:
       Timer has been wired for PWM capability.
     type: boolean
 
+  ti,timer-clocksource:
+    description:
+      Use this timer as the clocksource and sched_clock even when a 32 KiHz
+      counter is available, e.g. one faster to read or clocked faster.
+    type: boolean
+
   ti,timer-secure:
     description:
       Timer access has been limited to secure mode only.
