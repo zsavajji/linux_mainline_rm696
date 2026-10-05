@@ -9141,8 +9141,13 @@ again:
 	throttled = false;
 
 	do {
-		/* Might not have done put_prev_entity() */
-		if (cfs_rq->curr && cfs_rq->curr->on_rq)
+		/*
+		 * Might not have done put_prev_entity(). Alone on its cfs_rq, the current entity is
+		 * the pick whatever its vruntime, and its runtime isn't lost (exec_start stays: the
+		 * next update_curr() there accounts it): the cgroup levels above a task usually hold
+		 * one entity each, and Harmattan's tasks run three levels down
+		 */
+		if (cfs_rq->curr && cfs_rq->curr->on_rq && cfs_rq->nr_queued > 1)
 			update_curr(cfs_rq);
 
 		throttled |= check_cfs_rq_runtime(cfs_rq);
