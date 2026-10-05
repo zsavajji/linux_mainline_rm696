@@ -1843,7 +1843,8 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 loop_out:
 	vma_iter_free(&vmi);
 	if (!retval) {
-		mt_set_in_rcu(vmi.mas.tree);
+		if (MM_MT_FLAGS & MT_FLAGS_USE_RCU)
+			mt_set_in_rcu(vmi.mas.tree);
 		ksm_fork(mm, oldmm);
 		khugepaged_fork(mm, oldmm);
 	} else {

@@ -1272,8 +1272,18 @@ static inline void __mm_flags_set_mask_bits_word(struct mm_struct *mm,
 	set_mask_bits(bitmap, mask, bits);
 }
 
+#ifdef CONFIG_PER_VMA_LOCK
 #define MM_MT_FLAGS	(MT_FLAGS_ALLOC_RANGE | MT_FLAGS_LOCK_EXTERN | \
 			 MT_FLAGS_USE_RCU)
+#else
+/*
+ * Without per-VMA locks every reader of the VMA tree holds mmap_lock, and
+ * since stack expansion takes it for writing, so does every writer: RCU
+ * mode, which copies a node for each store and frees the old one through
+ * RCU, buys nothing then.
+ */
+#define MM_MT_FLAGS	(MT_FLAGS_ALLOC_RANGE | MT_FLAGS_LOCK_EXTERN)
+#endif
 extern struct mm_struct init_mm;
 
 /* Pointer magic because the dynamic array size confuses some compilers. */
