@@ -251,21 +251,6 @@ static struct omap_hwmod omap3xxx_timer9_hwmod = {
 	.flags		= HWMOD_SET_DEFAULT_CLOCKACT,
 };
 
-/* timer10 */
-static struct omap_hwmod omap3xxx_timer10_hwmod = {
-	.name		= "timer10",
-	.main_clk	= "gpt10_fck",
-	.prcm		= {
-		.omap2 = {
-			.module_offs = CORE_MOD,
-			.idlest_reg_id = 1,
-			.idlest_idle_bit = OMAP3430_ST_GPT10_SHIFT,
-		},
-	},
-	.class		= &omap3xxx_timer_hwmod_class,
-	.flags		= HWMOD_SET_DEFAULT_CLOCKACT,
-};
-
 /* timer11 */
 static struct omap_hwmod omap3xxx_timer11_hwmod = {
 	.name		= "timer11",
@@ -1768,14 +1753,6 @@ static struct omap_hwmod_ocp_if omap3xxx_l4_per__timer9 = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
-/* l4_core -> timer10 */
-static struct omap_hwmod_ocp_if omap3xxx_l4_core__timer10 = {
-	.master		= &omap3xxx_l4_core_hwmod,
-	.slave		= &omap3xxx_timer10_hwmod,
-	.clk		= "gpt10_ick",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
 /* l4_core -> timer11 */
 static struct omap_hwmod_ocp_if omap3xxx_l4_core__timer11 = {
 	.master		= &omap3xxx_l4_core_hwmod,
@@ -2320,7 +2297,6 @@ static struct omap_hwmod_ocp_if *omap3xxx_hwmod_ocp_ifs[] __initdata = {
 	&omap3xxx_l4_per__timer7,
 	&omap3xxx_l4_per__timer8,
 	&omap3xxx_l4_per__timer9,
-	&omap3xxx_l4_core__timer10,
 	&omap3xxx_l4_core__timer11,
 	&omap3xxx_l4_wkup__wd_timer2,
 	&omap3xxx_l4_wkup__gpio1,
