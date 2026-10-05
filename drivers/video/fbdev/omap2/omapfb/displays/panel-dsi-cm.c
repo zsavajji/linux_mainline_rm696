@@ -2145,7 +2145,9 @@ static int dsicm_probe(struct platform_device *pdev)
 	ddata->split_late_us = 2000;
 	ddata->region_latch = true;
 
-	dsicm_hw_reset(ddata);
+	/* sgx: not while NOLO's panel is kept (omapdss.def_disp_enabled), as stock's pnd_probe */
+	if (!omapdss_def_disp_enabled())
+		dsicm_hw_reset(ddata);
 
 	/*
 	 * Brightness by DCS unless the DT names a backlight. It registers under the panel's alias,
