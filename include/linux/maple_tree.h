@@ -520,6 +520,7 @@ struct ma_wr_state {
 
 void *mas_walk(struct ma_state *mas);
 void *mas_store(struct ma_state *mas, void *entry);
+void mas_replace_entry(struct ma_state *mas, void *entry);
 void *mas_erase(struct ma_state *mas);
 int mas_store_gfp(struct ma_state *mas, void *entry, gfp_t gfp);
 void mas_store_prealloc(struct ma_state *mas, void *entry);

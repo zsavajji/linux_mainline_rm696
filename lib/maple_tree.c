@@ -5094,6 +5094,25 @@ static inline void mte_destroy_walk(struct maple_enode *enode,
 /* Interface */
 
 /**
+ * mas_replace_entry() - Replace the entry @mas is on with another for the same
+ * range.
+ * @mas: The maple state, active on a non-%NULL entry of a leaf (after a walk or
+ * a find, with no store since).
+ * @entry: The new entry, not %NULL.
+ *
+ * One pointer store: neither the tree's shape nor its gaps change, so nothing
+ * else is written, and readers under RCU see the old entry or the new one.
+ */
+void mas_replace_entry(struct ma_state *mas, void *entry)
+{
+	void __rcu **slots = ma_slots(mas_mn(mas), mte_node_type(mas->node));
+
+	MAS_WARN_ON(mas, !mas_is_active(mas) || !mte_is_leaf(mas->node) ||
+		    !entry || !mas_slot_locked(mas, slots, mas->offset));
+	rcu_assign_pointer(slots[mas->offset], entry);
+}
+
+/**
  * mas_store() - Store an @entry.
  * @mas: The maple state.
  * @entry: The entry to store.

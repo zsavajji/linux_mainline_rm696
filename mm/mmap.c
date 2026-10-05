@@ -1804,10 +1804,11 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 			hugetlb_dup_vma_private(tmp);
 
 		/*
-		 * Link the vma into the MT. After using __mt_dup(), memory
-		 * allocation is not necessary here, so it cannot fail.
+		 * Link the vma into the MT: __mt_dup() copied the tree, and the
+		 * iterator is on mpnt's slot there, for the same range.
 		 */
-		vma_iter_bulk_store(&vmi, tmp);
+		mas_replace_entry(&vmi.mas, tmp);
+		vma_mark_attached(tmp);
 
 		mm->map_count++;
 
