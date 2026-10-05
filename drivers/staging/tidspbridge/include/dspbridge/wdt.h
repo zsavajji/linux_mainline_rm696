@@ -68,6 +68,15 @@ void dsp_wdt_exit(void);
 void dsp_wdt_enable(bool enable);
 
 /**
+ * dsp_wdt_clocks() - take or drop a reference on wdt3's clocks alone
+ * @on:		true to enable them, false to disable them again
+ *
+ * For the DSP's start: its firmware accesses wdt3 before the bridge
+ * calls dsp_wdt_enable().
+ */
+void dsp_wdt_clocks(bool on);
+
+/**
  * dsp_wdt_sm_set() - store pointer to the share memory
  * @data:		pointer to dspbridge share memory
  *

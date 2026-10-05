@@ -124,6 +124,20 @@ void dsp_wdt_exit(void)
 	dsp_wdt.reg_base = NULL;
 }
 
+void dsp_wdt_clocks(bool on)
+{
+	if (!dsp_wdt.fclk || !dsp_wdt.iclk)
+		return;
+
+	if (on) {
+		clk_enable(dsp_wdt.fclk);
+		clk_enable(dsp_wdt.iclk);
+	} else {
+		clk_disable(dsp_wdt.iclk);
+		clk_disable(dsp_wdt.fclk);
+	}
+}
+
 void dsp_wdt_enable(bool enable)
 {
 	u32 tmp;
