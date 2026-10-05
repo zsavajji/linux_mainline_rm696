@@ -335,17 +335,17 @@ void __init omap3_prm_init_pm(bool has_uart4, bool has_iva)
 				OMAP3430_EN_MCBSP4_MASK,
 				OMAP3430_PER_MOD, PM_WKEN);
 
-	/* and allow them to wake up MPU */
+	/*
+	 * and allow them to wake up MPU, except the McBSPs: their wakeups only need to wake PER for
+	 * the DMA, and the MPU would take a PRCM interrupt for each (as Nokia's N9 kernel)
+	 */
 	omap2_prm_write_mod_reg(grpsel_uart4_mask |
 				OMAP3430_GRPSEL_GPIO2_MASK |
 				OMAP3430_GRPSEL_GPIO3_MASK |
 				OMAP3430_GRPSEL_GPIO4_MASK |
 				OMAP3430_GRPSEL_GPIO5_MASK |
 				OMAP3430_GRPSEL_GPIO6_MASK |
-				OMAP3430_GRPSEL_UART3_MASK |
-				OMAP3430_GRPSEL_MCBSP2_MASK |
-				OMAP3430_GRPSEL_MCBSP3_MASK |
-				OMAP3430_GRPSEL_MCBSP4_MASK,
+				OMAP3430_GRPSEL_UART3_MASK,
 				OMAP3430_PER_MOD, OMAP3430_PM_MPUGRPSEL);
 
 	/* Don't attach IVA interrupts */
