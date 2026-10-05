@@ -565,16 +565,12 @@ void acct_collect(long exitcode, int group_dead)
 	u64 utime, stime;
 	unsigned long vsize = 0;
 
-	if (group_dead && current->mm) {
-		struct mm_struct *mm = current->mm;
-		VMA_ITERATOR(vmi, mm, 0);
-		struct vm_area_struct *vma;
-
-		mmap_read_lock(mm);
-		for_each_vma(vmi, vma)
-			vsize += vma->vm_end - vma->vm_start;
-		mmap_read_unlock(mm);
-	}
+	/*
+	 * The mm's size, as /proc's VmSize: total_vm is kept up to date with
+	 * every mapping, so no walk of all VMAs (and their lock) at every exit
+	 */
+	if (group_dead && current->mm)
+		vsize = READ_ONCE(current->mm->total_vm) << PAGE_SHIFT;
 
 	spin_lock_irq(&current->sighand->siglock);
 	if (group_dead)
