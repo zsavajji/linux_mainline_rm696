@@ -3492,7 +3492,7 @@ static inline void mas_wr_node_store(struct ma_wr_state *wr_mas,
 	void __rcu **dst_slots;
 	unsigned long *dst_pivots;
 	unsigned char dst_offset, offset_end = wr_mas->offset_end;
-	struct maple_node reuse, *newnode;
+	struct maple_node *newnode;
 	unsigned char copy_size, node_pivots = mt_pivots[wr_mas->type];
 	bool in_rcu = mt_in_rcu(mas->tree);
 	unsigned char height = mas_mt_height(mas);
@@ -3500,13 +3500,52 @@ static inline void mas_wr_node_store(struct ma_wr_state *wr_mas,
 	if (mas->last == wr_mas->end_piv)
 		offset_end++; /* don't copy this offset */
 
-	/* set up node. */
-	if (in_rcu) {
-		newnode = mas_pop_node(mas);
-	} else {
-		memset(&reuse, 0, sizeof(struct maple_node));
-		newnode = &reuse;
+	/*
+	 * Outside RCU mode nothing reads the node without the writer's lock:
+	 * shift the entries after the new range within the node instead of
+	 * building a copy and copying it back (two 256-byte copies and a
+	 * clear for a store of a few slots).
+	 */
+	if (!in_rcu) {
+		unsigned long *pivots = wr_mas->pivots;
+		void __rcu **slots = wr_mas->slots;
+		unsigned char old_end = mas->end, i;
+
+		dst_offset = mas->offset + (wr_mas->r_min < mas->index);
+		if (offset_end <= old_end) {
+			copy_size = old_end - offset_end + 1;
+			if (dst_offset + 1 != offset_end) {
+				memmove(slots + dst_offset + 1, slots + offset_end,
+					sizeof(void *) * copy_size);
+				memmove(pivots + dst_offset + 1, pivots + offset_end,
+					sizeof(unsigned long) * (copy_size - 1));
+			}
+			if (new_end < node_pivots)
+				pivots[new_end] = mas->max;
+		}
+		if (wr_mas->r_min < mas->index) {
+			rcu_assign_pointer(slots[mas->offset], wr_mas->content);
+			pivots[mas->offset] = mas->index - 1;
+		}
+		if (dst_offset < node_pivots)
+			pivots[dst_offset] = mas->last;
+		rcu_assign_pointer(slots[dst_offset], wr_mas->entry);
+		/* what the copy had zeroed: the slots past the new end */
+		for (i = new_end + 1; i <= old_end; i++) {
+			RCU_INIT_POINTER(slots[i], NULL);
+			if (i < node_pivots)
+				pivots[i] = 0;
+		}
+		mas_leaf_set_meta(wr_mas->node, maple_leaf_64, new_end);
+		mas->offset = dst_offset;
+		trace_ma_write(TP_FCT, mas, 0, wr_mas->entry);
+		mas_update_gap(mas);
+		mas->end = new_end;
+		return;
 	}
+
+	/* set up node. */
+	newnode = mas_pop_node(mas);
 
 	newnode->parent = mas_mn(mas)->parent;
 	dst_pivots = ma_pivots(newnode, wr_mas->type);
@@ -3546,13 +3585,11 @@ static inline void mas_wr_node_store(struct ma_wr_state *wr_mas,
 
 done:
 	mas_leaf_set_meta(newnode, maple_leaf_64, new_end);
-	if (in_rcu) {
+	{
 		struct maple_enode *old_enode = mas->node;
 
 		mas->node = mt_mk_node(newnode, wr_mas->type);
 		mas_replace_node(mas, old_enode, height);
-	} else {
-		memcpy(wr_mas->node, newnode, sizeof(struct maple_node));
 	}
 	trace_ma_write(TP_FCT, mas, 0, wr_mas->entry);
 	mas_update_gap(mas);
