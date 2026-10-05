@@ -340,8 +340,17 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	if (!pvma->anon_vma)
 		return 0;
 
-	/* Drop inherited anon_vma, we'll reuse existing or allocate new. */
-	vma->anon_vma = NULL;
+	/*
+	 * Keep the inherited anon_vma, the parent's, as Linux 2.6.32 did: the
+	 * child's COWed pages go there too, and anon_vma_clone() below links
+	 * the new VMA to it (as to the parent's other anon_vmas) and counts it
+	 * active. A per-child anon_vma (an allocation, a second chain link and
+	 * interval tree insert per VMA at fork, their teardown at exit) keeps
+	 * rmap walks of a child's own pages from visiting its siblings: that
+	 * scales to thousands of forks of one server; a phone has dozens of
+	 * processes, and its forks (applauncherd's boosters) copy hundreds of
+	 * VMAs each.
+	 */
 
 	/*
 	 * First, attach the new VMA to the parent VMA's anon_vmas,
@@ -351,7 +360,7 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	if (error)
 		return error;
 
-	/* An existing anon_vma has been reused, all done then. */
+	/* The parent's anon_vma is shared: all done then. */
 	if (vma->anon_vma)
 		return 0;
 
