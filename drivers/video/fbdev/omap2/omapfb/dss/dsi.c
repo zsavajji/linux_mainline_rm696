@@ -4298,6 +4298,13 @@ static int dsi_display_enable(struct omap_dss_device *dssdev)
 	if (r)
 		goto err_get_dsi;
 
+	/*
+	 * sgx: NOLO leaves its panel in ULPS (omapdss.def_disp_enabled): the first enable leaves it
+	 * by hand, as stock's first enable (skip_first_init) and our own ULPS resume do
+	 */
+	if (omapdss_def_disp_enabled())
+		dsi->ulps_enabled = true;
+
 	_dsi_initialize_irq(dsidev);
 
 	r = dsi_display_init_dsi(dsidev);
