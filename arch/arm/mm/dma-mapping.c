@@ -705,6 +705,14 @@ static void __dma_page_dev_to_cpu(struct page *page, unsigned long off,
 		dma_cache_maint_page(page, off, size, dir, dmac_unmap_area);
 	}
 
+	/* New contents, of a whole page or a part: not in the I-cache yet */
+	if (dir != DMA_TO_DEVICE && size) {
+		unsigned long pfn;
+
+		for (pfn = PFN_DOWN(paddr); pfn <= PFN_DOWN(paddr + size - 1); pfn++)
+			clear_bit(PG_icache_clean, &pfn_folio(pfn)->flags.f);
+	}
+
 	/*
 	 * Mark the D-cache clean for these pages to avoid extra flushing.
 	 */

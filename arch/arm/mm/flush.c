@@ -309,7 +309,13 @@ void __sync_icache_dcache(pte_t pteval)
 		set_bit(PG_dcache_clean, &folio->flags.f);
 	}
 
-	if (pte_exec(pteval))
+	/*
+	 * Once per change of the page's contents (as arm64), not for every executable mapping of
+	 * it: whoever changes them clears PG_icache_clean (flush_dcache_folio(), a DMA read, a
+	 * free). A VIVT ASID-tagged I-cache may hold another address space's lines here: always.
+	 */
+	if (pte_exec(pteval) && (icache_is_vivt_asid_tagged() ||
+				 !test_and_set_bit(PG_icache_clean, &folio->flags.f)))
 		__flush_icache_all();
 }
 #endif
@@ -343,6 +349,10 @@ void flush_dcache_folio(struct folio *folio)
 	 */
 	if (is_zero_pfn(folio_pfn(folio)))
 		return;
+
+	/* the contents change: the I-cache must be synced again before they run */
+	if (test_bit(PG_icache_clean, &folio->flags.f))
+		clear_bit(PG_icache_clean, &folio->flags.f);
 
 	if (!cache_ops_need_broadcast() && cache_is_vipt_nonaliasing()) {
 		if (test_bit(PG_dcache_clean, &folio->flags.f))

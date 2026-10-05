@@ -21,6 +21,8 @@
  * and does not require cleaning before returning it to the user.
  */
 #define PG_dcache_clean PG_arch_1
+/* the I-cache was invalidated since the page's contents last changed */
+#define PG_icache_clean PG_arch_2
 
 /*
  *	MM Cache Management
