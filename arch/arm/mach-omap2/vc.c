@@ -177,8 +177,6 @@ int omap_vc_pre_scale(struct voltagedomain *voltdm,
 
 	voltdm->vc_param->on = target_volt;
 
-	omap_vp_update_errorgain(voltdm, target_volt);
-
 	return 0;
 }
 

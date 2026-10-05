@@ -63,6 +63,7 @@ unsigned long voltdm_get_voltage(struct voltagedomain *voltdm)
 static int _voltdm_scale(struct voltagedomain *voltdm,
 			 unsigned long target_volt)
 {
+	struct omap_volt_data *vdata = NULL;
 	int ret, i;
 	unsigned long volt = 0;
 
@@ -86,7 +87,8 @@ static int _voltdm_scale(struct voltagedomain *voltdm,
 	/* Adjust voltage to the exact voltage from the OPP table */
 	for (i = 0; voltdm->volt_data[i].volt_nominal != 0; i++) {
 		if (voltdm->volt_data[i].volt_nominal >= target_volt) {
-			volt = voltdm->volt_data[i].volt_nominal;
+			vdata = &voltdm->volt_data[i];
+			volt = vdata->volt_nominal;
 			break;
 		}
 	}
@@ -97,7 +99,12 @@ static int _voltdm_scale(struct voltagedomain *voltdm,
 		return -EINVAL;
 	}
 
-	ret = voltdm->scale(voltdm, volt);
+	/*
+	 * The OPP's voltage once SmartReflex class 1.5 calibrated it (as Nokia's omap_voltage_scale()
+	 * with omap_operation_v()); the VP's error gain is the OPP's, whatever voltage it runs at
+	 */
+	omap_vp_update_errorgain(voltdm, volt);
+	ret = voltdm->scale(voltdm, omap_volt_operation(vdata));
 	if (!ret)
 		voltdm->nominal_volt = volt;
 
