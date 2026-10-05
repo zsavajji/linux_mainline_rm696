@@ -187,6 +187,17 @@ config POWER_AVS_OMAP_CLASS3
 	  Class 3 implementation of Smartreflex employs continuous hardware
 	  voltage calibration.
 
+config POWER_AVS_OMAP_CLASS1P5
+	bool "Class 1.5 mode of Smartreflex Implementation"
+	depends on POWER_AVS_OMAP && TWL4030_CORE && !POWER_AVS_OMAP_CLASS3
+	help
+	  Say Y to enable Class 1.5 implementation of Smartreflex, as Nokia's
+	  N9 kernel ran it.
+
+	  Class 1.5 calibrates each OPP's voltage with the hardware loop once
+	  (again after 24 hours) and then runs the OPP at that voltage with
+	  Smartreflex off.
+
 config OMAP3_L2_AUX_SECURE_SAVE_RESTORE
 	bool "OMAP3 HS/EMU save and restore for L2 AUX control register"
 	depends on ARCH_OMAP3 && PM

@@ -95,6 +95,7 @@ obj-$(CONFIG_PM_DEBUG)			+= pm-debug.o
 
 obj-$(CONFIG_POWER_AVS_OMAP)		+= sr_device.o
 obj-$(CONFIG_POWER_AVS_OMAP_CLASS3)    += smartreflex-class3.o
+obj-$(CONFIG_POWER_AVS_OMAP_CLASS1P5)  += smartreflex-class1p5.o
 
 endif
 

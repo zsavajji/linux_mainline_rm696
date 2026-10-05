@@ -217,9 +217,8 @@ static void sr_stop_vddautocomp(struct omap_sr *sr)
 	}
 
 	mutex_lock(&sr_lock);
-	/* not running if it waits for a voltage with an nTarget: its registers are unclocked */
-	if (sr->enabled)
-		sr_class->disable(sr, 1);
+	/* also when SR isn't running: class 1.5 then drops its calibrated voltages */
+	sr_class->disable(sr, 1);
 	sr->autocomp_active = false;
 	mutex_unlock(&sr_lock);
 }
@@ -713,6 +712,20 @@ int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
 	mutex_unlock(&sr_lock);
 
 	return ret;
+}
+
+/*
+ * For a class driver's own work outside voltage changes and autocomp changes (class 1.5's
+ * calibration): it must not wait for the lock, which omap_sr_scale() may hold while cancelling it
+ */
+bool omap_sr_trylock(void)
+{
+	return mutex_trylock(&sr_lock);
+}
+
+void omap_sr_unlock(void)
+{
+	mutex_unlock(&sr_lock);
 }
 
 /* PM Debug FS entries to enable and disable smartreflex. */

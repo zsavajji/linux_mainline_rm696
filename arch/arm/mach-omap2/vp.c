@@ -216,8 +216,9 @@ void omap_vp_enable(struct voltagedomain *voltdm)
 		return;
 
 	/*
-	 * From the voltage the VP last sent, the one the last force update set; the nominal one
-	 * if it never sent any.
+	 * From the voltage the VP last sent: the one the last force update set (SmartReflex
+	 * class 1.5 starts calibrating from the OPP's voltage, not the nominal one). The nominal
+	 * one if it never sent any.
 	 */
 	volt = voltdm->read(vp->voltage) & vp->common->vpvoltage_mask;
 	volt = volt ? voltdm->pmic->vsel_to_uv(volt) : voltdm_get_voltage(voltdm);

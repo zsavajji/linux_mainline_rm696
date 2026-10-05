@@ -28,6 +28,9 @@ static int sr_class3_enable(struct omap_sr *sr)
 
 static int sr_class3_disable(struct omap_sr *sr, int is_volt_reset)
 {
+	/* not running if it waits for a voltage with an nTarget: its registers are unclocked */
+	if (!sr->enabled)
+		return 0;
 	sr_disable_errgen(sr);
 	omap_vp_disable(sr->voltdm);
 	sr_disable(sr);

@@ -27,6 +27,7 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/cpuidle.h>
+#include <linux/power/smartreflex.h>
 
 #include <trace/events/power.h>
 
@@ -191,6 +192,14 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	int error;
 
 	mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
+	/*
+	 * No retention for a VDD while SmartReflex class 1.5 calibrates it, as Nokia's N9 kernel
+	 * (pm34xx.c: the domain stays on when omap_smartreflex_disable() refuses)
+	 */
+	if (mpu_next_state < PWRDM_POWER_ON && sr1p5_calibrating(mpu_pwrdm->voltdm.ptr)) {
+		mpu_next_state = PWRDM_POWER_ON;
+		pwrdm_set_next_pwrst(mpu_pwrdm, mpu_next_state);
+	}
 	switch (mpu_next_state) {
 	case PWRDM_POWER_ON:
 	case PWRDM_POWER_RET:
@@ -213,6 +222,10 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	/* Enable IO-PAD and IO-CHAIN wakeups */
 	per_next_state = pwrdm_read_next_pwrst(per_pwrdm);
 	core_next_state = pwrdm_read_next_pwrst(core_pwrdm);
+	if (core_next_state < PWRDM_POWER_ON && sr1p5_calibrating(core_pwrdm->voltdm.ptr)) {
+		core_next_state = PWRDM_POWER_ON;
+		pwrdm_set_next_pwrst(core_pwrdm, core_next_state);
+	}
 
 	pwrdm_pre_transition(NULL);
 

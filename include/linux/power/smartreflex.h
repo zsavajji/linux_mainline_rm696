@@ -300,6 +300,9 @@ extern struct omap_sr_data omap_sr_pdata[OMAP_SR_NR];
 /* Voltage changes stop and restart SmartReflex */
 int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt,
 		  int (*scale)(struct voltagedomain *voltdm, unsigned long volt));
+/* the lock they take, for a class driver's own work */
+bool omap_sr_trylock(void);
+void omap_sr_unlock(void);
 
 /* Smartreflex driver hooks to be called from Smartreflex class driver */
 int sr_enable(struct omap_sr *sr, unsigned long volt);
@@ -315,6 +318,16 @@ static inline int omap_sr_scale(struct voltagedomain *voltdm, unsigned long volt
 				int (*scale)(struct voltagedomain *voltdm, unsigned long volt))
 {
 	return scale(voltdm, volt);
+}
+#endif
+
+/* Class 1.5 calibrating on @voltdm: its domains stay out of retention (omap_sram_idle()) */
+#ifdef CONFIG_POWER_AVS_OMAP_CLASS1P5
+bool sr1p5_calibrating(struct voltagedomain *voltdm);
+#else
+static inline bool sr1p5_calibrating(struct voltagedomain *voltdm)
+{
+	return false;
 }
 #endif
 #endif
