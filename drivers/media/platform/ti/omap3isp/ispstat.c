@@ -516,9 +516,12 @@ int omap3isp_stat_request_statistics(struct ispstat *stat,
 int omap3isp_stat_request_statistics_time32(struct ispstat *stat,
 					struct omap3isp_stat_data_time32 *data)
 {
-	struct omap3isp_stat_data data64 = { };
+	struct omap3isp_stat_data data64 = {
+		.buf = (void __user *)(uintptr_t)data->buf,
+	};
 	int ret;
 
+	memcpy(&data64.frame, &data->frame, sizeof(data->frame));
 	ret = omap3isp_stat_request_statistics(stat, &data64);
 	if (ret)
 		return ret;
