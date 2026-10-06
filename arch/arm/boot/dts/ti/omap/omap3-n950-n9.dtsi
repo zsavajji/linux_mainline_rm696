@@ -502,3 +502,12 @@
 &aes2_target {
 	status = "disabled";
 };
+
+/*
+ * The SHA1/MD5 accelerator (SHA12): no driver for it here (omap-sham isn't built in), and its hwmod
+ * kept its interface clock on with the module never idle. Stock had it off and idle (CM_ICLKEN1_CORE
+ * bit 27 clear, CM_IDLEST1_CORE bit 27 set, N9 stock pm_debug, 2026-10-06).
+ */
+&sham {
+	status = "disabled";
+};
