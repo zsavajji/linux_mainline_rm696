@@ -2107,7 +2107,8 @@ static void isp_parse_of_csi1_endpoint(struct device *dev,
 	buscfg->bus.ccp2.ccp2_mode = vep->bus_type == V4L2_MBUS_CCP2;
 	buscfg->bus.ccp2.vp_clk_pol = 1;
 
-	buscfg->bus.ccp2.crc = 1;
+	/* CRCs in CCP2 mode only, as Nokia's board files (the N9's and N950's front camera: none) */
+	buscfg->bus.ccp2.crc = vep->bus_type == V4L2_MBUS_CCP2;
 }
 
 static struct {
