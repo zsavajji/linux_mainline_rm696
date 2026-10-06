@@ -9,6 +9,7 @@
 
 #include "omap3-n950-n9.dtsi"
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/media/video-interfaces.h>
 #include "omap3-n9-audio.dtsi"
 #include "omap3-n9-nokia.dtsi"
 
@@ -17,21 +18,54 @@
 	compatible = "nokia,omap3-n9", "ti,omap3630", "ti,omap3";
 };
 
+/*
+ * The cameras as stock's board-rm696-camera.c, with Harmattan's drivers (nokia-camera): the main
+ * module powers up at 0x10 and its driver moves it to 0x37, where stock's userspace finds its
+ * sysfs; the front module stays at 0x10 (XSHUTDOWN, GPIO 97, low until it is used); the main
+ * module's lens at 0x0e, its flash at 0x30 (as3645a, omap3-n950-n9.dtsi). VANA (VAUX3) is
+ * shared; XCLKA 9.6 MHz (main sensor and lens), XCLKB 10.8 MHz (front)
+ */
 &i2c2 {
-	smia_1: camera@10 {
-		compatible = "nokia,smia";
-		reg = <0x10>;
-		/* No reset gpio */
+	cam1: camera@37 {
+		compatible = "nokia,rm696-main-camera";
+		reg = <0x37>;
 		vana-supply = <&vaux3>;
 		clocks = <&isp 0>;
 		clock-frequency = <9600000>;
-		flash-leds = <&as3645a_flash &as3645a_indicator>;
+		lens-focus = <&cam1_lens>;
+		flash-leds = <&cam1_flash>;
 		port {
-			smia_1_1: endpoint {
-				link-frequencies = /bits/ 64 <199200000 210000000 499200000>;
+			cam1_ep: endpoint {
 				clock-lanes = <0>;
 				data-lanes = <1 2>;
 				remote-endpoint = <&csi2a_ep>;
+			};
+		};
+	};
+
+	cam1_lens: lens@e {
+		compatible = "nokia,rm696-ad58xx";
+		reg = <0x0e>;
+		vana-supply = <&vaux3>;
+		clocks = <&isp 0>;
+		clock-frequency = <9600000>;
+	};
+
+	cam1_flash: as3645a@30 {
+	};
+
+	cam2: camera@10 {
+		compatible = "nokia,rm696-front-camera";
+		reg = <0x10>;
+		vana-supply = <&vaux3>;
+		clocks = <&isp 1>;
+		clock-frequency = <10800000>;
+		reset-gpios = <&gpio4 1 GPIO_ACTIVE_LOW>;	/* 97: XSHUTDOWN */
+		rotation = <180>;
+		port {
+			cam2_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI1>;
+				remote-endpoint = <&ccp2_ep>;
 			};
 		};
 	};
@@ -48,10 +82,24 @@
 	vdd-csiphy1-supply = <&vaux2>;
 	vdd-csiphy2-supply = <&vaux2>;
 	ports {
+		/* The front camera: CSIPHY1, MIPI CSI-1 (stock: ccp2_mode 0), data/clock (phy_layer 0) */
+		port@1 {
+			reg = <1>;
+			ccp2_ep: endpoint {
+				remote-endpoint = <&cam2_ep>;
+				bus-type = <MEDIA_BUS_TYPE_CSI1>;
+				clock-lanes = <1>;
+				data-lanes = <2>;
+				lane-polarities = <0 0>;
+				clock-inv = <0>;
+				strobe = <0>;
+				crc = <0>;
+			};
+		};
 		port@2 {
 			reg = <2>;
 			csi2a_ep: endpoint {
-				remote-endpoint = <&smia_1_1>;
+				remote-endpoint = <&cam1_ep>;
 				clock-lanes = <2>;
 				data-lanes = <1 3>;
 				crc = <1>;
