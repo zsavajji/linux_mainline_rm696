@@ -577,6 +577,18 @@ EXPORT_SYMBOL(v4l2_subdev_call_wrappers);
 
 #if defined(CONFIG_VIDEO_V4L2_SUBDEV_API)
 
+/*
+ * Harmattan's camera userspace (2011) knew no 'which' in the enumeration structs and leaves
+ * that old reserved word uninitialised: enumerate the TRY state then, as its kernel did
+ */
+static u32 enum_which(u32 *which)
+{
+	if (*which > V4L2_SUBDEV_FORMAT_ACTIVE)
+		*which = V4L2_SUBDEV_FORMAT_TRY;
+
+	return *which;
+}
+
 static struct v4l2_subdev_state *
 subdev_ioctl_get_state(struct v4l2_subdev *sd, struct v4l2_subdev_fh *subdev_fh,
 		       unsigned int cmd, void *arg)
@@ -595,13 +607,13 @@ subdev_ioctl_get_state(struct v4l2_subdev *sd, struct v4l2_subdev_fh *subdev_fh,
 		which = ((struct v4l2_subdev_crop *)arg)->which;
 		break;
 	case VIDIOC_SUBDEV_ENUM_MBUS_CODE:
-		which = ((struct v4l2_subdev_mbus_code_enum *)arg)->which;
+		which = enum_which(&((struct v4l2_subdev_mbus_code_enum *)arg)->which);
 		break;
 	case VIDIOC_SUBDEV_ENUM_FRAME_SIZE:
-		which = ((struct v4l2_subdev_frame_size_enum *)arg)->which;
+		which = enum_which(&((struct v4l2_subdev_frame_size_enum *)arg)->which);
 		break;
 	case VIDIOC_SUBDEV_ENUM_FRAME_INTERVAL:
-		which = ((struct v4l2_subdev_frame_interval_enum *)arg)->which;
+		which = enum_which(&((struct v4l2_subdev_frame_interval_enum *)arg)->which);
 		break;
 	case VIDIOC_SUBDEV_G_SELECTION:
 	case VIDIOC_SUBDEV_S_SELECTION:
@@ -614,6 +626,13 @@ subdev_ioctl_get_state(struct v4l2_subdev *sd, struct v4l2_subdev_fh *subdev_fh,
 		if (!(subdev_fh->client_caps &
 		      V4L2_SUBDEV_CLIENT_CAP_INTERVAL_USES_WHICH))
 			fi->which = V4L2_SUBDEV_FORMAT_ACTIVE;
+
+		/*
+		 * Harmattan's camera source sets a sensor's frame interval without initialising
+		 * the pad: on a subdev with a single pad there is only one it can mean
+		 */
+		if (sd->entity.num_pads == 1)
+			fi->pad = 0;
 
 		which = fi->which;
 		break;
