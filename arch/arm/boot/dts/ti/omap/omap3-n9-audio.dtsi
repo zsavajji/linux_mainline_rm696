@@ -77,6 +77,8 @@
 		reg = <0x19>;
 		reset-gpios = <&gpio2 28 GPIO_ACTIVE_HIGH>;			/* gpio 60, powers it */
 		interrupts-extended = <&gpio2 21 IRQ_TYPE_EDGE_RISING>;	/* gpio 53 */
+		ti,burst-bclkdiv = <3>;	/* FIFO modes: bursts at 16.384 MHz BCLK */
+		ti,keep-bclk;		/* and BCLK on between them */
 		AVDD-supply = <&vaux4>;
 		DVDD-supply = <&vio>;
 		IOVDD-supply = <&vio>;
