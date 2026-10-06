@@ -48,6 +48,24 @@ static int smia_reglist_cmp(const void *a, const void *b)
 }
 
 /*
+ * A DPCM8 mode with the sensor's scaler on (SMIA scaling_mode 0x0401): in those (imx125's 2728x2048
+ * and 3144x1772) the sensor codes the first two pixels of each odd line against the line two above
+ * instead of as PCM. The CSI2 receiver's decompressor copes, but Harmattan's stills decompress in
+ * the CCP2 memory input, which can't (either predictor): every odd line then carries a colour cast.
+ */
+static bool smia_reglist_scaled_dpcm(const struct smia_reglist *list)
+{
+	const struct smia_reg *reg;
+
+	if (list->mode.pixel_format != V4L2_PIX_FMT_SGRBG10DPCM8)
+		return false;
+	for (reg = list->regs; reg->type != SMIA_REG_TERM; reg++)
+		if (reg->type == SMIA_REG_8BIT && reg->reg == 0x0401 && reg->val)
+			return true;
+	return false;
+}
+
+/*
  * Prepare register list created by dcc-pulautin for use in kernel.
  * The pointers in the list are actually offsets from the beginning of
  * the blob.
@@ -68,8 +86,15 @@ int smia_reglist_import(struct device *dev, struct smia_meta_reglist *meta)
 		 meta->version);
 
 	while (meta->reglist[nlists].offset != 0) {
-		meta->reglist[nlists].ptr = (void *)meta +
-			meta->reglist[nlists].offset;
+		struct smia_reglist *list = (void *)meta + meta->reglist[nlists].offset;
+
+		/* not offered: their stills come out striped (smia_reglist_scaled_dpcm()) */
+		if (list->type == SMIA_REGLIST_MODE && smia_reglist_scaled_dpcm(list)) {
+			dev_info(dev, "%ux%u DPCM8 mode with sensor scaling disabled\n",
+				 list->mode.window_width, list->mode.window_height);
+			list->type = SMIA_REGLIST_DISABLED;
+		}
+		meta->reglist[nlists].ptr = list;
 		nlists++;
 	}
 
