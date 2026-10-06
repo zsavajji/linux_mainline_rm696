@@ -752,6 +752,22 @@ struct v4l2_event_time32 {
 
 #define	VIDIOC_DQEVENT_TIME32	 _IOR('V', 89, struct v4l2_event_time32)
 
+/*
+ * Harmattan's struct v4l2_event (Nokia's 2.6.32 kernel): no id, and a union without the 64-bit
+ * control value, so on 32-bit ARM the payload is at offset 4 and the struct 120 bytes (the
+ * time32 struct above: 8 and 128)
+ */
+struct v4l2_event_nokia {
+	__u32				type;
+	__u8				data[64];
+	__u32				pending;
+	__u32				sequence;
+	struct old_timespec32		timestamp;
+	__u32				reserved[9];
+};
+
+#define	VIDIOC_DQEVENT_NOKIA	 _IOR('V', 89, struct v4l2_event_nokia)
+
 struct v4l2_buffer_time32 {
 	__u32			index;
 	__u32			type;

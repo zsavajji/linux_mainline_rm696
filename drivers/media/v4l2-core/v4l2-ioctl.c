@@ -3245,6 +3245,10 @@ static int check_array_args(unsigned int cmd, void *parg, size_t *array_size,
 
 unsigned int v4l2_translate_cmd(unsigned int cmd)
 {
+#ifndef CONFIG_64BIT
+	if (cmd == VIDIOC_DQEVENT_NOKIA)
+		return VIDIOC_DQEVENT;
+#endif
 #if !defined(CONFIG_64BIT) && defined(CONFIG_COMPAT_32BIT_TIME)
 	switch (cmd) {
 	case VIDIOC_DQEVENT_TIME32:
@@ -3356,6 +3360,27 @@ static int video_put_user(void __user *arg, void *parg,
 
 	if (in_compat_syscall())
 		return v4l2_compat_put_user(arg, parg, cmd);
+
+#ifndef CONFIG_64BIT
+	if (cmd == VIDIOC_DQEVENT_NOKIA) {
+		struct v4l2_event *ev = parg;
+		struct v4l2_event_nokia evn;
+
+		static_assert(sizeof(evn) == 120);
+		memset(&evn, 0, sizeof(evn));
+
+		evn.type	= ev->type;
+		evn.pending	= ev->pending;
+		evn.sequence	= ev->sequence;
+		evn.timestamp.tv_sec	= ev->timestamp.tv_sec;
+		evn.timestamp.tv_nsec	= ev->timestamp.tv_nsec;
+		memcpy(evn.data, &ev->u, sizeof(evn.data));
+
+		if (copy_to_user(arg, &evn, sizeof(evn)))
+			return -EFAULT;
+		return 0;
+	}
+#endif
 
 #if !defined(CONFIG_64BIT) && defined(CONFIG_COMPAT_32BIT_TIME)
 	switch (cmd) {
