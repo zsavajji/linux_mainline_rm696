@@ -4280,6 +4280,8 @@ static void dsi_display_uninit_dsi(struct platform_device *dsidev,
 	dss_select_dsi_clk_source(dsi->module_id, OMAP_DSS_CLK_SRC_FCK);
 	dsi_cio_uninit(dsidev);
 	dsi_pll_uninit(dsidev, disconnect_lanes);
+	/* dsi_display_init_dsi() enabled the PLL with dss_pll_enable(), which took its clkin */
+	clk_disable_unprepare(dsi->pll.clkin);
 }
 
 static int dsi_display_enable(struct omap_dss_device *dssdev)
