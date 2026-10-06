@@ -13,6 +13,7 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
 #include <linux/slab.h>
 #include <linux/timekeeping.h>
 #include <linux/uaccess.h>
@@ -331,10 +332,16 @@ static struct ispstat_buffer *isp_stat_buf_get(struct ispstat *stat,
 	return buf;
 }
 
+/* The device the statistics buffers are for: the DMA engine's, or the ISP's (its IOMMU) */
+static struct device *isp_stat_dma_dev(struct ispstat *stat)
+{
+	return ISP_STAT_USES_DMAENGINE(stat)
+	       ? dmaengine_get_dma_device(stat->dma_ch) : stat->isp->dev;
+}
+
 static void isp_stat_bufs_free(struct ispstat *stat)
 {
-	struct device *dev = ISP_STAT_USES_DMAENGINE(stat)
-			   ? NULL : stat->isp->dev;
+	struct device *dev = isp_stat_dma_dev(stat);
 	unsigned int i;
 
 	for (i = 0; i < STAT_MAX_BUFS; i++) {
@@ -390,10 +397,9 @@ static int isp_stat_bufs_alloc_one(struct device *dev,
  * The first case (for the AEWB and AF engines) passes the ISP device, resulting
  * in the DMA buffers being mapped through the ISP IOMMU.
  *
- * The second case (for the histogram engine) should pass the DMA engine device.
- * As that device isn't accessible through the OMAP DMA engine API the driver
- * passes NULL instead, resulting in the buffers being mapped directly as
- * physical pages.
+ * The second case (for the histogram engine) passes the DMA engine device (not
+ * NULL, which the ARM DMA API dereferences): the buffers are then mapped
+ * directly as physical pages.
  *
  * The third case (for the histogram engine) doesn't require any mapping. The
  * buffers could be allocated with kmalloc/vmalloc, but we still use
@@ -401,8 +407,7 @@ static int isp_stat_bufs_alloc_one(struct device *dev,
  */
 static int isp_stat_bufs_alloc(struct ispstat *stat, u32 size)
 {
-	struct device *dev = ISP_STAT_USES_DMAENGINE(stat)
-			   ? NULL : stat->isp->dev;
+	struct device *dev = isp_stat_dma_dev(stat);
 	unsigned long flags;
 	unsigned int i;
 
