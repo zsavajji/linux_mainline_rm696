@@ -551,6 +551,8 @@ static int csi2_configure(struct isp_csi2_device *csi2)
 	struct isp_csi2_timing_cfg *timing = &csi2->timing[0];
 	struct v4l2_subdev *sensor;
 	struct media_pad *pad;
+	s64 link_freq;
+	u64 rate;
 
 	/*
 	 * CSI2 fields that can be updated while the context has
@@ -570,11 +572,22 @@ static int csi2_configure(struct isp_csi2_device *csi2)
 	csi2->frame_skip = 0;
 	v4l2_subdev_call(sensor, sensor, g_skip_frames, &csi2->frame_skip);
 
+	/*
+	 * The video port must take a line as fast as the link brings it. A sensor's pixel rate
+	 * can be its average over the line, blanking included (Nokia's smiapp, as the N9's board
+	 * file set it for the CCDC's video port), so take the link's own rate when it's faster.
+	 * L3 / rate, from 2 to 4: the port runs at L3 / (vp_out_ctrl + 1).
+	 */
+	link_freq = v4l2_get_link_freq(pad, 0, 0);
+	rate = pipe->external_rate;
+	if (link_freq > 0)
+		rate = max_t(u64, rate, div_u64((u64)link_freq * 2 *
+						buscfg->bus.csi2.num_data_lanes,
+						pipe->external_width));
 	csi2->ctrl.vp_out_ctrl =
-		clamp_t(unsigned int, pipe->l3_ick / pipe->external_rate - 1,
-			1, 3);
-	dev_dbg(isp->dev, "%s: l3_ick %lu, external_rate %u, vp_out_ctrl %u\n",
-		__func__, pipe->l3_ick,  pipe->external_rate,
+		clamp_t(u64, div64_u64(pipe->l3_ick, rate), 2, 4) - 1;
+	dev_dbg(isp->dev, "%s: l3_ick %lu, external_rate %u, link %lld, vp_out_ctrl %u\n",
+		__func__, pipe->l3_ick,  pipe->external_rate, link_freq,
 		csi2->ctrl.vp_out_ctrl);
 	csi2->ctrl.frame_mode = ISP_CSI2_FRAME_IMMEDIATE;
 	csi2->ctrl.ecc_enable = buscfg->bus.csi2.crc;
