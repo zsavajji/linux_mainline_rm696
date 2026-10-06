@@ -1416,7 +1416,13 @@ static struct isp_device *__omap3isp_get(struct isp_device *isp, bool irq)
 	if (isp->ref_count > 0)
 		goto out;
 
+	/* The IOMMU is powered only while the ISP is in use (see __omap3isp_put()) */
+	if (isp->mapping)
+		omap_iommu_domain_activate(isp->mapping->domain);
+
 	if (isp_enable_clocks(isp) < 0) {
+		if (isp->mapping)
+			omap_iommu_domain_deactivate(isp->mapping->domain);
 		__isp = NULL;
 		goto out;
 	}
@@ -1467,6 +1473,13 @@ static void __omap3isp_put(struct isp_device *isp, bool save_ctx)
 		    isp->stop_failure)
 			isp_reset(isp);
 		isp_disable_clocks(isp);
+		/*
+		 * An active IOMMU keeps cam_ick enabled, and with it CAM's
+		 * automatic sleep dependency on the MPU: cpuidle then stays in
+		 * C1, which keeps the MPU clock domain active, so CAM never idles.
+		 */
+		if (isp->mapping)
+			omap_iommu_domain_deactivate(isp->mapping->domain);
 	}
 	mutex_unlock(&isp->isp_mutex);
 }
