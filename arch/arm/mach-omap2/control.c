@@ -83,7 +83,7 @@ struct omap3_scratchpad_sdrc_block {
 	u32 block_size;
 };
 
-void *omap3_secure_ram_storage;
+phys_addr_t omap3_secure_ram_storage;
 
 /*
  * This is used to store ARM registers in SDRAM before attempting
@@ -261,7 +261,7 @@ void omap3_save_scratchpad_contents(void)
 		scratchpad_contents.secure_ram_restore_ptr = 0x0;
 	else
 		scratchpad_contents.secure_ram_restore_ptr =
-			(u32) __pa(omap3_secure_ram_storage);
+			(u32)omap3_secure_ram_storage;
 	scratchpad_contents.sdrc_module_semaphore = 0x0;
 	scratchpad_contents.prcm_block_offset = 0x2C;
 	scratchpad_contents.sdrc_block_offset = 0x64;

@@ -119,7 +119,7 @@ int __init omap_secure_ram_reserve_memblock(void)
 }
 
 #if defined(CONFIG_ARCH_OMAP3) && defined(CONFIG_PM)
-u32 omap3_save_secure_ram(void *addr, int size)
+u32 omap3_save_secure_ram(phys_addr_t pa, int size)
 {
 	static u32 param[5];
 	u32 ret;
@@ -128,7 +128,7 @@ u32 omap3_save_secure_ram(void *addr, int size)
 		return OMAP3_SAVE_SECURE_RAM_SZ;
 
 	param[0] = 4;		/* Number of arguments */
-	param[1] = __pa(addr);	/* Physical address for saving */
+	param[1] = pa;		/* Physical address for saving */
 	param[2] = 0;
 	param[3] = 1;
 	param[4] = 1;

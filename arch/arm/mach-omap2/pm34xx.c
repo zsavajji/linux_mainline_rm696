@@ -26,6 +26,7 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/of.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/cpuidle.h>
 #include <linux/power/smartreflex.h>
 
@@ -94,34 +95,62 @@ static void omap3_core_restore_context(void)
 	omap_intc_restore_context();
 }
 
+/* pm_debug: secure RAM saves, failed ones, the last failure's return value */
+u32 omap3_secure_ram_saves, omap3_secure_ram_save_fails, omap3_secure_ram_save_ret;
+
 /*
- * FIXME: This function should be called before entering off-mode after
- * OMAP3 secure services have been accessed. Currently it is only called
- * once during boot sequence, but this works as we are not using secure
- * services.
+ * The HS secure RAM's image, which the ROM restores after CORE OFF. Saved at boot and at every
+ * CORE OFF entry, as Nokia's N9 kernel (pm34xx.c, omap_sram_idle(): the secure calls change the
+ * secure state). Returns nonzero when it couldn't be saved: CORE must not go OFF then.
  */
-static void omap3_save_secure_ram_context(void)
+static int omap3_save_secure_ram_context(void)
 {
 	u32 ret;
 	int mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
 
-	if (omap_type() != OMAP2_DEVICE_TYPE_GP) {
-		/*
-		 * MPU next state must be set to POWER_ON temporarily,
-		 * otherwise the WFI executed inside the ROM code
-		 * will hang the system.
-		 */
-		pwrdm_set_next_pwrst(mpu_pwrdm, PWRDM_POWER_ON);
-		ret = omap3_save_secure_ram(omap3_secure_ram_storage,
-					    OMAP3_SAVE_SECURE_RAM_SZ);
-		pwrdm_set_next_pwrst(mpu_pwrdm, mpu_next_state);
-		/* Following is for error tracking, it should not happen */
-		if (ret) {
-			pr_err("save_secure_sram() returns %08x\n", ret);
-			while (1)
-				;
-		}
+	if (omap_type() == OMAP2_DEVICE_TYPE_GP)
+		return 0;
+	if (!omap3_secure_ram_storage)
+		return -ENOMEM;
+
+	/*
+	 * MPU next state must be set to POWER_ON temporarily,
+	 * otherwise the WFI executed inside the ROM code
+	 * will hang the system.
+	 */
+	pwrdm_set_next_pwrst(mpu_pwrdm, PWRDM_POWER_ON);
+	ret = omap3_save_secure_ram(omap3_secure_ram_storage,
+				    OMAP3_SAVE_SECURE_RAM_SZ);
+	pwrdm_set_next_pwrst(mpu_pwrdm, mpu_next_state);
+	omap3_secure_ram_saves++;
+	if (ret) {
+		omap3_secure_ram_save_fails++;
+		omap3_secure_ram_save_ret = ret;
+		pr_err_ratelimited("save_secure_sram() returns %08x\n", ret);
 	}
+
+	return ret;
+}
+
+/*
+ * The DT's no-map carveout below 0x90000000 (the ROM saves only there: Nokia's pm.h), else a
+ * kmalloc'd buffer, as before
+ */
+static phys_addr_t __init omap3_secure_ram_buffer(void)
+{
+	struct device_node *parent = of_find_node_by_path("/reserved-memory");
+	struct device_node *np = of_get_child_by_name(parent, "secure-ram");
+	struct reserved_mem *rmem = np ? of_reserved_mem_lookup(np) : NULL;
+	void *buf;
+
+	of_node_put(np);
+	of_node_put(parent);
+	if (rmem && rmem->size >= OMAP3_SAVE_SECURE_RAM_SZ &&
+	    rmem->base + OMAP3_SAVE_SECURE_RAM_SZ <= 0x90000000)
+		return rmem->base;
+
+	buf = kmalloc(OMAP3_SAVE_SECURE_RAM_SZ, GFP_KERNEL);
+	return buf ? __pa(buf) : 0;
 }
 
 static irqreturn_t _prcm_int_handle_io(int irq, void *unused)
@@ -189,6 +218,7 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	int per_next_state = PWRDM_POWER_ON;
 	int core_next_state = PWRDM_POWER_ON;
 	u32 sdrc_pwr = 0;
+	bool core_off_refused = false;
 	int error;
 
 	mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
@@ -250,6 +280,17 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	omap3_intc_prepare_idle();
 
 	/*
+	 * The secure RAM image, after the INTC change as stock (the ROM's save does a WFI too). No
+	 * fresh image, no CORE OFF: retention this time
+	 */
+	if (core_next_state == PWRDM_POWER_OFF && omap3_save_secure_ram_context()) {
+		core_next_state = PWRDM_POWER_RET;
+		pwrdm_set_next_pwrst(core_pwrdm, core_next_state);
+		omap3_vc_set_pmic_signaling(core_next_state);
+		core_off_refused = true;
+	}
+
+	/*
 	 * On EMU/HS devices ROM code restores a SRDC value
 	 * from scratchpad which has automatic self refresh on timeout
 	 * of AUTO_CNT = 1 enabled. This takes care of erratum ID i443.
@@ -308,6 +349,9 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	/* PER */
 	if (per_next_state == PWRDM_POWER_OFF)
 		cpu_cluster_pm_exit();
+
+	if (core_off_refused)
+		pwrdm_set_next_pwrst(core_pwrdm, PWRDM_POWER_OFF);
 }
 
 static void omap3_pm_idle(void)
@@ -614,8 +658,7 @@ int __init omap3_pm_init(void)
 
 	clkdm_add_wkdep(neon_clkdm, mpu_clkdm);
 	if (omap_type() != OMAP2_DEVICE_TYPE_GP) {
-		omap3_secure_ram_storage =
-			kmalloc(OMAP3_SAVE_SECURE_RAM_SZ, GFP_KERNEL);
+		omap3_secure_ram_storage = omap3_secure_ram_buffer();
 		if (!omap3_secure_ram_storage)
 			pr_err("Memory allocation failed when allocating for secure sram context\n");
 

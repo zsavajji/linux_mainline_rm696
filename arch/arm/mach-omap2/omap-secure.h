@@ -30,7 +30,8 @@
 /* Maximum Secure memory storage size */
 #define OMAP_SECURE_RAM_STORAGE	(88 * SZ_1K)
 
-#define OMAP3_SAVE_SECURE_RAM_SZ	0x803F
+/* 48 KiB of secure RAM (omap_hs resizes it so on the N9) plus the ROM's 0x40 header, as stock */
+#define OMAP3_SAVE_SECURE_RAM_SZ	0xC040
 
 /* Secure low power HAL API index */
 #define OMAP4_HAL_SAVESECURERAM_INDEX	0x1a
@@ -72,7 +73,7 @@ extern u32 omap_smc2(u32 id, u32 falg, u32 pargs);
 extern u32 omap_smc3(u32 id, u32 process, u32 flag, u32 pargs);
 extern int omap_secure_ram_reserve_memblock(void);
 extern u32 save_secure_ram_context(u32 args_pa);
-extern u32 omap3_save_secure_ram(void *save_regs, int size);
+extern u32 omap3_save_secure_ram(phys_addr_t save_pa, int size);
 
 extern u32 rx51_secure_update_aux_cr(u32 set_bits, u32 clear_bits);
 extern u32 rx51_secure_rng_call(u32 ptr, u32 count, u32 flag);

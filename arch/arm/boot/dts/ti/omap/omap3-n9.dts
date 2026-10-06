@@ -172,6 +172,16 @@
 			console-size = <0x40000>;
 		};
 
+		/*
+		 * The HS secure RAM's image for the ROM to restore after CORE OFF (48 KiB + 0x40), as
+		 * stock's boot-time reservation (pm34xx.c, OMAP_SECURE_COPY_AREA_SIZE): the ROM saves it
+		 * only below 0x8fffffff (stock pm.h). Mapped, as stock's: the kernel never writes it. With
+		 * no-map here the kernel died before its console came up (boots 231, 232).
+		 */
+		secure-ram@8f100000 {
+			reg = <0x8f100000 0x10000>;
+		};
+
 		/* the DSP bridge's pool (below), as stock's boot-time carveout for its 5 MiB of SHM */
 		dsp_pool: dsp-pool {
 			size = <0x600000>;
