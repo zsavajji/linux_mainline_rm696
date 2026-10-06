@@ -277,6 +277,13 @@ struct omap_mcbsp {
 	int wlen;
 
 	struct pm_qos_request pm_qos_req;
+
+	/* Runtime power level (SND_SOC_PM_*) requested by the codec */
+	spinlock_t pm_lock;
+	bool pm_inactive;	/* fclk gated, module force-idled */
+	bool pm_locked;		/* TX not started: stay active */
+	u16 pm_syscon;		/* SYSCON while active */
+	u16 pm_xbuffstat;	/* XBUFFSTAT when it went inactive */
 };
 
 static inline void omap_mcbsp_write(struct omap_mcbsp *mcbsp, u16 reg, u32 val)

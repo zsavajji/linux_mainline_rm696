@@ -259,10 +259,16 @@ static void omap_mcbsp_set_rx_threshold(struct omap_mcbsp *mcbsp, u16 threshold)
  */
 static u16 omap_mcbsp_get_tx_delay(struct omap_mcbsp *mcbsp)
 {
+	unsigned long flags;
 	u16 buffstat;
 
 	/* Returns the number of free locations in the buffer */
-	buffstat = MCBSP_READ(mcbsp, XBUFFSTAT);
+	spin_lock_irqsave(&mcbsp->pm_lock, flags);
+	if (mcbsp->pm_inactive)
+		buffstat = mcbsp->pm_xbuffstat;
+	else
+		buffstat = MCBSP_READ(mcbsp, XBUFFSTAT);
+	spin_unlock_irqrestore(&mcbsp->pm_lock, flags);
 
 	/* Number of slots are different in McBSP ports */
 	return mcbsp->pdata->buffer_size - buffstat;
@@ -407,6 +413,50 @@ static void omap_mcbsp_free(struct omap_mcbsp *mcbsp)
 }
 
 /*
+ * Nokia's runtime power levels (omap_mcbsp_set_pm_state() in their 2.6.32 kernel), for a codec
+ * that reads the McBSP in bursts: inactive, the McBSP is force-idled without wakeups and its
+ * functional clock gated, so its power domain can idle between the bursts. Nokia's kernel
+ * gated the interface clock too; mainline leaves the McBSPs' on under hardware autoidle. Called
+ * with pm_lock held.
+ */
+static void omap_mcbsp_set_pm_state(struct omap_mcbsp *mcbsp, bool active)
+{
+	struct pm_qos_request *pm_qos_req = &mcbsp->pm_qos_req;
+	u16 w;
+
+	if (mcbsp->pm_inactive == !active)
+		return;
+
+	if (active) {
+		clk_enable(mcbsp->fclk);
+		MCBSP_WRITE(mcbsp, SYSCON, mcbsp->pm_syscon);
+		if (mcbsp->pdata->has_wakeup)
+			MCBSP_WRITE(mcbsp, WAKEUPEN, XRDYEN | RRDYEN);
+		/* The FIFO drains again: its latency, as omap_mcbsp_dai_prepare() set it */
+		if (cpu_latency_qos_request_active(pm_qos_req))
+			cpu_latency_qos_update_request(pm_qos_req,
+				mcbsp->latency[SNDRV_PCM_STREAM_PLAYBACK]);
+	} else {
+		mcbsp->pm_xbuffstat = MCBSP_READ(mcbsp, XBUFFSTAT);
+		mcbsp->pm_syscon = MCBSP_READ(mcbsp, SYSCON);
+		/*
+		 * Nokia's HW bug workaround: from no idle, smart idle before force idle, or the
+		 * McBSP doesn't hit retention anymore
+		 */
+		w = mcbsp->pm_syscon & ~(ENAWAKEUP | SIDLEMODE(0x03) | CLOCKACTIVITY(0x03));
+		MCBSP_WRITE(mcbsp, SYSCON, w | SIDLEMODE(0x02));
+		MCBSP_WRITE(mcbsp, SYSCON, w);
+		if (mcbsp->pdata->has_wakeup)
+			MCBSP_WRITE(mcbsp, WAKEUPEN, 0);
+		clk_disable(mcbsp->fclk);
+		/* No frames until the codec's next burst: no FIFO to keep from running dry */
+		if (cpu_latency_qos_request_active(pm_qos_req))
+			cpu_latency_qos_update_request(pm_qos_req, PM_QOS_DEFAULT_VALUE);
+	}
+	mcbsp->pm_inactive = !active;
+}
+
+/*
  * Here we start the McBSP, by enabling transmitter, receiver or both.
  * If no transmitter or receiver is active prior calling, then sample-rate
  * generator and frame sync are started.
@@ -416,6 +466,7 @@ static void omap_mcbsp_start(struct omap_mcbsp *mcbsp, int stream)
 	int tx = (stream == SNDRV_PCM_STREAM_PLAYBACK);
 	int rx = !tx;
 	int enable_srg = 0;
+	unsigned long flags;
 	u16 w;
 
 	if (mcbsp->st_data)
@@ -466,6 +517,11 @@ static void omap_mcbsp_start(struct omap_mcbsp *mcbsp, int stream)
 		MCBSP_WRITE(mcbsp, RCCR, w);
 	}
 
+	/* The codec may request power levels now */
+	spin_lock_irqsave(&mcbsp->pm_lock, flags);
+	mcbsp->pm_locked = false;
+	spin_unlock_irqrestore(&mcbsp->pm_lock, flags);
+
 	/* Dump McBSP Regs */
 	omap_mcbsp_dump_reg(mcbsp);
 }
@@ -474,8 +530,15 @@ static void omap_mcbsp_stop(struct omap_mcbsp *mcbsp, int stream)
 {
 	int tx = (stream == SNDRV_PCM_STREAM_PLAYBACK);
 	int rx = !tx;
+	unsigned long flags;
 	int idle;
 	u16 w;
+
+	/* Active, and staying so until the next start */
+	spin_lock_irqsave(&mcbsp->pm_lock, flags);
+	mcbsp->pm_locked = true;
+	omap_mcbsp_set_pm_state(mcbsp, true);
+	spin_unlock_irqrestore(&mcbsp->pm_lock, flags);
 
 	/* Reset transmitter */
 	tx &= 1;
@@ -619,6 +682,8 @@ static int omap_mcbsp_init(struct platform_device *pdev)
 
 	spin_lock_init(&mcbsp->lock);
 	mcbsp->free = true;
+	spin_lock_init(&mcbsp->pm_lock);
+	mcbsp->pm_locked = true;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mpu");
 	if (!res)
@@ -909,6 +974,42 @@ static snd_pcm_sframes_t omap_mcbsp_dai_delay(
 	delay = fifo_use / substream->runtime->channels;
 
 	return delay;
+}
+
+/*
+ * Nokia's omap_mcbsp_request_power_level(): playback only, inactive once the DMA has stopped
+ * filling the FIFO
+ */
+static int omap_mcbsp_dai_request_power_level(struct snd_pcm_substream *substream,
+					      enum snd_soc_power_level level,
+					      struct snd_soc_dai *cpu_dai)
+{
+	struct omap_mcbsp *mcbsp = snd_soc_dai_get_drvdata(cpu_dai);
+	u16 fifo_use, prev_fifo_use = 0;
+	unsigned long flags;
+	int i = 0;
+
+	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
+		return 0;
+
+	if (level == SND_SOC_PM_INACTIVE) {
+		fifo_use = omap_mcbsp_get_tx_delay(mcbsp);
+		while (fifo_use != prev_fifo_use && i < 100) {
+			udelay(10);
+			prev_fifo_use = fifo_use;
+			fifo_use = omap_mcbsp_get_tx_delay(mcbsp);
+			i++;
+		}
+		if (i == 100)
+			return 0;
+	}
+
+	spin_lock_irqsave(&mcbsp->pm_lock, flags);
+	if (!mcbsp->pm_locked)
+		omap_mcbsp_set_pm_state(mcbsp, level == SND_SOC_PM_ACTIVE);
+	spin_unlock_irqrestore(&mcbsp->pm_lock, flags);
+
+	return 0;
 }
 
 static int omap_mcbsp_dai_hw_params(struct snd_pcm_substream *substream,
@@ -1285,6 +1386,7 @@ static const struct snd_soc_dai_ops mcbsp_dai_ops = {
 	.prepare	= omap_mcbsp_dai_prepare,
 	.trigger	= omap_mcbsp_dai_trigger,
 	.delay		= omap_mcbsp_dai_delay,
+	.request_power_level = omap_mcbsp_dai_request_power_level,
 	.hw_params	= omap_mcbsp_dai_hw_params,
 	.set_fmt	= omap_mcbsp_dai_set_dai_fmt,
 	.set_clkdiv	= omap_mcbsp_dai_set_clkdiv,
