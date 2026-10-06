@@ -621,7 +621,7 @@ static void *vb2_dc_get_userptr(struct vb2_buffer *vb, struct device *dev,
 			if (nums[i-1] + 1 != nums[i])
 				goto fail_pfnvec;
 		buf->dma_addr = dma_map_resource(buf->dev,
-				__pfn_to_phys(nums[0]), size, buf->dma_dir, 0);
+				__pfn_to_phys(nums[0]) + offset, size, buf->dma_dir, 0);
 		if (dma_mapping_error(buf->dev, buf->dma_addr)) {
 			ret = -ENOMEM;
 			goto fail_pfnvec;
