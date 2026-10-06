@@ -194,6 +194,7 @@ struct omap_i2c_dev {
 	u8			*regs;
 	size_t			buf_len;
 	struct i2c_adapter	adapter;
+	char			compat_name[16];	/* /sys/devices/platform link */
 	u8			threshold;
 	u8			fifo_size;	/* use as flag and value
 						 * fifo_size==0 implies no fifo
@@ -1509,6 +1510,16 @@ omap_i2c_probe(struct platform_device *pdev)
 	dev_info(omap->dev, "bus %d rev%d.%d at %d kHz\n", adap->nr,
 		 major, minor, omap->speed);
 
+	/*
+	 * Harmattan's camera reads its sensor's sysfs under the controller's 2.6.32 platform
+	 * device: /sys/devices/platform/i2c_omap.N/i2c-N/
+	 */
+	snprintf(omap->compat_name, sizeof(omap->compat_name), "i2c_omap.%d",
+		 adap->nr);
+	if (sysfs_create_link(&platform_bus.kobj, &pdev->dev.kobj,
+			      omap->compat_name))
+		omap->compat_name[0] = '\0';
+
 	pm_runtime_put_autosuspend(omap->dev);
 
 	return 0;
@@ -1532,6 +1543,8 @@ static void omap_i2c_remove(struct platform_device *pdev)
 	struct omap_i2c_dev	*omap = platform_get_drvdata(pdev);
 	int ret;
 
+	if (omap->compat_name[0])
+		sysfs_remove_link(&platform_bus.kobj, omap->compat_name);
 	i2c_del_adapter(&omap->adapter);
 
 	if (omap->mux_state)
