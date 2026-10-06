@@ -36,6 +36,15 @@
 #include "ti-bandgap.h"
 
 static int ti_bandgap_force_single_read(struct ti_bandgap *bgp, int id);
+
+/*
+ * Sensors without continuous mode (OMAP3) convert only when read: their functional clock runs for
+ * each conversion alone, or it keeps the CORE power domain from ever idling.
+ */
+static bool ti_bandgap_clk_on_demand(struct ti_bandgap *bgp)
+{
+	return TI_BANDGAP_HAS(bgp, CLK_CTRL) && !TI_BANDGAP_HAS(bgp, MODE_CONFIG);
+}
 #ifdef CONFIG_PM_SLEEP
 static int bandgap_omap_cpu_notifier(struct notifier_block *nb,
 				  unsigned long cmd, void *v);
@@ -531,15 +540,21 @@ int ti_bandgap_read_temperature(struct ti_bandgap *bgp, int id,
 	if (ret)
 		return ret;
 
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_enable(bgp->fclock);
+
 	if (!TI_BANDGAP_HAS(bgp, MODE_CONFIG)) {
 		ret = ti_bandgap_force_single_read(bgp, id);
 		if (ret)
-			return ret;
+			goto out_clk;
 	}
 
 	spin_lock(&bgp->lock);
 	temp = ti_bandgap_read_temp(bgp, id);
 	spin_unlock(&bgp->lock);
+
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_disable(bgp->fclock);
 
 	ret = ti_bandgap_adc_to_mcelsius(bgp, temp, &temp);
 	if (ret)
@@ -548,6 +563,11 @@ int ti_bandgap_read_temperature(struct ti_bandgap *bgp, int id,
 	*temperature = temp;
 
 	return 0;
+
+out_clk:
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_disable(bgp->fclock);
+	return ret;
 }
 
 /**
@@ -953,7 +973,9 @@ int ti_bandgap_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Cannot re-set clock rate. Continuing\n");
 
 	bgp->clk_rate = clk_rate;
-	if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_prepare(bgp->fclock);
+	else if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
 		clk_prepare_enable(bgp->fclock);
 
 
@@ -1055,7 +1077,9 @@ remove_sensors:
 	}
 	ti_bandgap_power(bgp, false);
 disable_clk:
-	if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_unprepare(bgp->fclock);
+	else if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
 		clk_disable_unprepare(bgp->fclock);
 put_clks:
 	clk_put(bgp->div_clk);
@@ -1088,7 +1112,9 @@ void ti_bandgap_remove(struct platform_device *pdev)
 
 	ti_bandgap_power(bgp, false);
 
-	if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_unprepare(bgp->fclock);
+	else if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
 		clk_disable_unprepare(bgp->fclock);
 	clk_put(bgp->fclock);
 	clk_put(bgp->div_clk);
@@ -1150,7 +1176,11 @@ static int ti_bandgap_restore_ctxt(struct ti_bandgap *bgp)
 		/* Force immediate temperature measurement and update
 		 * of the DTEMP field
 		 */
+		if (ti_bandgap_clk_on_demand(bgp))
+			clk_enable(bgp->fclock);
 		ti_bandgap_force_single_read(bgp, i);
+		if (ti_bandgap_clk_on_demand(bgp))
+			clk_disable(bgp->fclock);
 
 		if (TI_BANDGAP_HAS(bgp, COUNTER))
 			ti_bandgap_writel(bgp, rval->bg_counter,
@@ -1177,7 +1207,9 @@ static int ti_bandgap_suspend(struct device *dev)
 	err = ti_bandgap_save_ctxt(bgp);
 	ti_bandgap_power(bgp, false);
 
-	if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_unprepare(bgp->fclock);
+	else if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
 		clk_disable_unprepare(bgp->fclock);
 
 	bgp->is_suspended = true;
@@ -1199,14 +1231,14 @@ static int bandgap_omap_cpu_notifier(struct notifier_block *nb,
 			break;
 		ti_bandgap_save_ctxt(bgp);
 		ti_bandgap_power(bgp, false);
-		if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+		if (TI_BANDGAP_HAS(bgp, CLK_CTRL) && !ti_bandgap_clk_on_demand(bgp))
 			clk_disable(bgp->fclock);
 		break;
 	case CPU_CLUSTER_PM_ENTER_FAILED:
 	case CPU_CLUSTER_PM_EXIT:
 		if (bgp->is_suspended)
 			break;
-		if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+		if (TI_BANDGAP_HAS(bgp, CLK_CTRL) && !ti_bandgap_clk_on_demand(bgp))
 			clk_enable(bgp->fclock);
 		ti_bandgap_power(bgp, true);
 		ti_bandgap_restore_ctxt(bgp);
@@ -1221,7 +1253,9 @@ static int ti_bandgap_resume(struct device *dev)
 {
 	struct ti_bandgap *bgp = dev_get_drvdata(dev);
 
-	if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
+	if (ti_bandgap_clk_on_demand(bgp))
+		clk_prepare(bgp->fclock);
+	else if (TI_BANDGAP_HAS(bgp, CLK_CTRL))
 		clk_prepare_enable(bgp->fclock);
 
 	ti_bandgap_power(bgp, true);
