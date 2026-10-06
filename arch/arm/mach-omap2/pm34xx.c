@@ -379,12 +379,21 @@ void omap3_pm_off_mode_enable(int enable)
 		state = PWRDM_POWER_RET;
 
 	list_for_each_entry(pwrst, &pwrst_list, node) {
+		/*
+		 * The DSP bridge powers the IVA2 itself (Nokia's kernel left it out of this list):
+		 * setting a hibernated IVA2's next state would force its clockdomain awake
+		 */
+		if (!strcmp(pwrst->pwrdm->name, "iva2_pwrdm"))
+			continue;
 		if (IS_PM34XX_ERRATUM(PM_SDRC_WAKEUP_ERRATUM_i583) &&
 				pwrst->pwrdm == core_pwrdm &&
 				state == PWRDM_POWER_OFF) {
 			pwrst->next_state = PWRDM_POWER_RET;
 			pr_warn("%s: Core OFF disabled due to errata i583\n",
 				__func__);
+		} else if (disable_core_off && pwrst->pwrdm == core_pwrdm &&
+			   state == PWRDM_POWER_OFF) {
+			pwrst->next_state = PWRDM_POWER_RET;
 		} else {
 			pwrst->next_state = state;
 		}

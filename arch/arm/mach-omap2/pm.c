@@ -29,6 +29,8 @@
 #include "pm.h"
 
 u32 enable_off_mode;
+/* Keeps CORE at retention when OFF mode is on, as Nokia's N9 kernel (pm_debug/disable_core_off) */
+u32 disable_core_off;
 
 #ifdef CONFIG_SUSPEND
 /*

@@ -198,10 +198,16 @@ static int __init pwrdms_setup(struct powerdomain *pwrdm, void *dir)
 /*
  * Nokia's N9 kernel had these too. Harmattan's /sbin/read_cfg.awk writes them from /etc/pmconfig at
  * every boot and stops at the first one missing, before its SmartReflex, governor and frequency lines.
- * Mainline behaves as if they were all allowed (CORE may go off with enable_off_mode, idle sleeps,
- * voltages go down in idle): kept for it, without effect
+ * disable_core_off keeps CORE at retention with OFF mode on, as there. Mainline behaves as if the
+ * other two were allowed (idle sleeps, voltages go down in idle): kept for it, without effect
  */
-static u32 disable_core_off, sleep_while_idle = 1, voltage_off_while_idle = 1;
+static u32 sleep_while_idle = 1, voltage_off_while_idle = 1;
+
+/*
+ * On the N9, Harmattan's pmconfig asks for OFF mode at every boot: the request takes effect once
+ * off_mode_armed is 1 (written by hand on test boots). Elsewhere OFF mode is armed from the start.
+ */
+static u32 off_mode_requested, off_mode_armed = 1;
 
 static int option_get(void *data, u64 *val)
 {
@@ -218,20 +224,14 @@ static int option_set(void *data, u64 val)
 
 	*option = val;
 
-	if (option == &enable_off_mode) {
-		/*
-		 * The N9 is an HS device: OFF mode needs its secure RAM saved as Nokia's kernel did
-		 * (0xc040 bytes, again whenever dirty), which isn't done yet. Its pmconfig asks for
-		 * OFF mode at every boot: accept the write, don't apply it
-		 */
-		if (val && of_machine_is_compatible("nokia,omap3-n9")) {
-			pr_warn_once("pm_debug: OFF mode isn't available on the N9 yet\n");
-			*option = 0;
-			return 0;
-		}
-		if (cpu_is_omap34xx())
-			omap3_pm_off_mode_enable(val);
-	}
+	if (option == &sleep_while_idle || option == &voltage_off_while_idle)
+		return 0;
+
+	if (option == &enable_off_mode)
+		off_mode_requested = val;
+	enable_off_mode = off_mode_armed ? off_mode_requested : 0;
+	if (cpu_is_omap34xx())
+		omap3_pm_off_mode_enable(enable_off_mode);
 
 	return 0;
 }
@@ -260,6 +260,10 @@ static int __init pm_dbg_init(void)
 			    &sleep_while_idle, &pm_dbg_option_fops);
 	debugfs_create_file("voltage_off_while_idle", S_IRUGO | S_IWUSR, d,
 			    &voltage_off_while_idle, &pm_dbg_option_fops);
+	if (of_machine_is_compatible("nokia,omap3-n9"))
+		off_mode_armed = 0;
+	debugfs_create_file("off_mode_armed", S_IRUGO | S_IWUSR, d,
+			    &off_mode_armed, &pm_dbg_option_fops);
 	pm_dbg_init_done = 1;
 
 	return 0;

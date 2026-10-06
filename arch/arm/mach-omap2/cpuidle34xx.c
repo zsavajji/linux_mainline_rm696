@@ -43,6 +43,12 @@ struct omap3_idle_statedata {
 
 static struct powerdomain *mpu_pd, *core_pd, *per_pd, *cam_pd;
 
+/* Domains CORE OFF would reset under their feet: CORE goes OFF only once they are */
+static const char * const core_off_pd_names[] = {
+	"cam_pwrdm", "dss_pwrdm", "iva2_pwrdm", "sgx_pwrdm", "usbhost_pwrdm",
+};
+static struct powerdomain *core_off_pds[ARRAY_SIZE(core_off_pd_names)];
+
 /*
  * Possible flag bits for struct omap3_idle_statedata.flags:
  *
@@ -81,15 +87,16 @@ static struct omap3_idle_statedata omap3_idle_data[] = {
 		.core_state = PWRDM_POWER_ON,
 		.per_min_state = PWRDM_POWER_RET,
 	},
+	/* PER OFF only with CORE OFF, as Nokia's N9 kernel (cpuidle34xx.c) */
 	{
 		.mpu_state = PWRDM_POWER_RET,
 		.core_state = PWRDM_POWER_RET,
-		.per_min_state = PWRDM_POWER_OFF,
+		.per_min_state = PWRDM_POWER_RET,
 	},
 	{
 		.mpu_state = PWRDM_POWER_OFF,
 		.core_state = PWRDM_POWER_RET,
-		.per_min_state = PWRDM_POWER_OFF,
+		.per_min_state = PWRDM_POWER_RET,
 	},
 	{
 		.mpu_state = PWRDM_POWER_OFF,
@@ -182,7 +189,8 @@ static int next_valid_state(struct cpuidle_device *dev,
 		 * CORE OFF mode is not supported in a stable form, restrict
 		 * instead the CORE state to RET.
 		 */
-		if (!IS_PM34XX_ERRATUM(PM_SDRC_WAKEUP_ERRATUM_i583))
+		if (!IS_PM34XX_ERRATUM(PM_SDRC_WAKEUP_ERRATUM_i583) &&
+		    !disable_core_off)
 			core_deepest_state = PWRDM_POWER_OFF;
 	}
 
@@ -205,6 +213,20 @@ static int next_valid_state(struct cpuidle_device *dev,
 	}
 
 	return next_index;
+}
+
+/* The index of C6, MPU OFF + CORE RET */
+#define OMAP3_IDLE_MPU_OFF_CORE_RET	5
+
+static bool omap3_core_off_allowed(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(core_off_pds); i++)
+		if (core_off_pds[i] && pwrdm_read_pwrst(core_off_pds[i]) > PWRDM_POWER_OFF)
+			return false;
+
+	return true;
 }
 
 /**
@@ -232,6 +254,14 @@ static int omap3_enter_idle_bm(struct cpuidle_device *dev,
 		new_state_idx = drv->safe_state_index;
 	else
 		new_state_idx = next_valid_state(dev, drv, index);
+
+	/*
+	 * CORE OFF resets the chip: only with CAM, DSS, IVA2, SGX and USBHOST off already, else
+	 * MPU OFF + CORE RET, as Nokia's N9 kernel (cpuidle34xx.c, omap3_enter_idle_bm())
+	 */
+	if (omap3_idle_data[new_state_idx].core_state == PWRDM_POWER_OFF &&
+	    !omap3_core_off_allowed())
+		new_state_idx = OMAP3_IDLE_MPU_OFF_CORE_RET;
 
 	/*
 	 * FIXME: we currently manage device-specific idle states
@@ -405,6 +435,8 @@ static struct cpuidle_driver omap3430_idle_driver = {
  */
 int __init omap3_idle_init(void)
 {
+	int i;
+
 	mpu_pd = pwrdm_lookup("mpu_pwrdm");
 	core_pd = pwrdm_lookup("core_pwrdm");
 	per_pd = pwrdm_lookup("per_pwrdm");
@@ -412,6 +444,9 @@ int __init omap3_idle_init(void)
 
 	if (!mpu_pd || !core_pd || !per_pd || !cam_pd)
 		return -ENODEV;
+
+	for (i = 0; i < ARRAY_SIZE(core_off_pds); i++)
+		core_off_pds[i] = pwrdm_lookup(core_off_pd_names[i]);
 
 	if (cpu_is_omap3430())
 		return cpuidle_register(&omap3430_idle_driver, NULL);
