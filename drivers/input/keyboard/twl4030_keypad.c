@@ -49,6 +49,9 @@ struct twl4030_keypad {
 
 	struct device *dbg_dev;
 	struct input_dev *input;
+
+	struct mutex mutex;	/* disable_kp */
+	bool disabled;
 };
 
 /*----------------------------------------------------------------------*/
@@ -312,6 +315,54 @@ static int twl4030_kp_program(struct twl4030_keypad *kp)
 }
 
 /*
+ * Nokia's disable_kp, which Harmattan's mce writes while the touchscreen and keypad lock is on:
+ * every key released, the keypad's interrupts masked and off until it writes 0
+ */
+static ssize_t disable_kp_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct twl4030_keypad *kp = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", kp->disabled);
+}
+
+static ssize_t disable_kp_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct twl4030_keypad *kp = dev_get_drvdata(dev);
+	unsigned long val;
+	int error;
+
+	error = kstrtoul(buf, 10, &val);
+	if (error)
+		return error;
+
+	guard(mutex)(&kp->mutex);
+	if (!!val == kp->disabled)
+		return count;
+
+	if (val) {
+		disable_irq(kp->irq);
+		twl4030_kpwrite_u8(kp, KEYP_IMR1_MIS | KEYP_IMR1_TO | KEYP_IMR1_LK | KEYP_IMR1_KP,
+				   KEYP_IMR1);
+		twl4030_kp_scan(kp, true);
+	} else {
+		twl4030_kpwrite_u8(kp, (u8) ~(KEYP_IMR1_KP | KEYP_IMR1_TO), KEYP_IMR1);
+		enable_irq(kp->irq);
+	}
+	kp->disabled = val;
+
+	return count;
+}
+
+static DEVICE_ATTR(disable_kp, 0664, disable_kp_show, disable_kp_store);
+
+static struct attribute *twl4030_kp_attrs[] = {
+	&dev_attr_disable_kp.attr,
+	NULL
+};
+ATTRIBUTE_GROUPS(twl4030_kp);
+
+/*
  * Registers keypad device with input subsystem
  * and configures TWL4030 keypad registers
  */
@@ -333,6 +384,8 @@ static int twl4030_kp_probe(struct platform_device *pdev)
 	/* get the debug device */
 	kp->dbg_dev		= &pdev->dev;
 	kp->input		= input;
+	mutex_init(&kp->mutex);
+	platform_set_drvdata(pdev, kp);
 
 	/* setup input device */
 	input->name		= "TWL4030 Keypad";
@@ -425,6 +478,7 @@ static struct platform_driver twl4030_kp_driver = {
 	.driver		= {
 		.name	= "twl4030_keypad",
 		.of_match_table = of_match_ptr(twl4030_keypad_dt_match_table),
+		.dev_groups = twl4030_kp_groups,
 	},
 };
 module_platform_driver(twl4030_kp_driver);
