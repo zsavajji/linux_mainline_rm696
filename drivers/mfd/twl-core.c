@@ -715,6 +715,7 @@ static void twl6030_power_off(void)
 
 static struct of_dev_auxdata twl_auxdata_lookup[] = {
 	OF_DEV_AUXDATA("ti,twl4030-gpio", 0, "twl4030-gpio", NULL),
+	OF_DEV_AUXDATA("ti,twl4030-usb", 0, "twl4030_usb", NULL),
 	{ /* sentinel */ },
 };
 
@@ -894,6 +895,24 @@ twl_probe(struct i2c_client *client)
 				pm_power_off = twl6030_power_off;
 			else
 				dev_warn(&client->dev, "Poweroff callback already assigned\n");
+		}
+	}
+
+	/*
+	 * The keypad under the client of its registers' slave, as 2.6.32's twl4030-core placed it:
+	 * Harmattan's mce disables it at 1-004a/twl4030_keypad/disable_kp (and reads the USB PHY's
+	 * 1-0048/twl4030_usb/vbus, named by twl_auxdata_lookup). of_platform_populate() skips a node
+	 * already created.
+	 */
+	if (twl_class_is_4030()) {
+		struct device_node *kp = of_get_compatible_child(node, "ti,twl4030-keypad");
+
+		if (kp) {
+			u8 sid = twl_priv->twl_map[TWL4030_MODULE_KEYPAD].sid;
+
+			of_platform_device_create(kp, "twl4030_keypad",
+						  &twl_priv->twl_modules[sid].client->dev);
+			of_node_put(kp);
 		}
 	}
 
