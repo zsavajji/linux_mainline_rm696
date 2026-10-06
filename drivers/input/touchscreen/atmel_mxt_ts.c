@@ -3422,9 +3422,171 @@ static ssize_t mxt_calibrate_store(struct device *dev, struct device_attribute *
 	return error ?: count;
 }
 
+/*
+ * Nokia's configuration controls, which Harmattan's mxt_configure.sh uses at boot: it picks the
+ * configuration file for the panel (display0/hw_revision) and firmware, and if config_crc differs
+ * from the file's, writes it to the chip's RAM (clear_config, write_config). config_crc is the CRC24
+ * of the configuration area (T7 and the objects right after it) as the chip holds it now,
+ * nv_config_crc the chip's checksum from its last T6 message. Nokia's backup_config, into the chip's
+ * NVM, is left out: the script calls it only when nv_config_crc differs from the file's.
+ * ponytail: T9's range and orientation are read at probe only; a configuration changing them would
+ * need the input device set up again.
+ */
+static int mxt_config_area(struct mxt_data *data, u16 *start, u16 *len)
+{
+	u16 s = 0, c = 0;
+	int i;
+
+	if (!data->info || !data->object_table)
+		return -ENODEV;
+
+	for (i = 0; i < data->info->object_num; i++) {
+		struct mxt_object *obj = data->object_table + i;
+		u16 size = mxt_obj_size(obj) * mxt_obj_instances(obj);
+
+		if (obj->type == MXT_GEN_POWER_T7) {
+			s = obj->start_address;
+			c = size;
+		} else if (s && s + c == obj->start_address) {
+			c += size;
+		} else if (s) {
+			break;
+		}
+	}
+	if (!s)
+		return -ENODEV;
+
+	*start = s;
+	*len = c;
+	return 0;
+}
+
+static ssize_t mxt_firmware_version_show(struct device *dev, struct device_attribute *attr,
+					 char *buf)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+
+	if (!data->info)
+		return -ENODEV;
+	return sysfs_emit(buf, "%u.%u\n", data->info->version >> 4, data->info->version & 0xf);
+}
+
+static ssize_t mxt_config_crc_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+	u16 start, len;
+	u8 *cfg;
+	int error;
+
+	error = mxt_config_area(data, &start, &len);
+	if (error)
+		return error;
+
+	cfg = kmalloc(len, GFP_KERNEL);
+	if (!cfg)
+		return -ENOMEM;
+
+	error = __mxt_read_reg(data->client, start, len, cfg);
+	if (!error)
+		error = sysfs_emit(buf, "0x%x\n", mxt_calculate_crc(cfg, 0, len));
+	kfree(cfg);
+	return error;
+}
+
+static ssize_t mxt_nv_config_crc_show(struct device *dev, struct device_attribute *attr,
+				      char *buf)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "0x%x\n", data->config_crc);
+}
+
+static ssize_t mxt_clear_config_store(struct device *dev, struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+	u16 start, len;
+	u8 *zero;
+	int error;
+
+	error = mxt_config_area(data, &start, &len);
+	if (error)
+		return error;
+
+	zero = kzalloc(len, GFP_KERNEL);
+	if (!zero)
+		return -ENOMEM;
+
+	error = __mxt_write_reg(data->client, start, len, zero);
+	kfree(zero);
+	return error ?: count;
+}
+
+/* The file is Nokia's: per object [type][size - 1][data], an object larger than its data zeroed */
+static ssize_t mxt_write_config_store(struct device *dev, struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct mxt_data *data = dev_get_drvdata(dev);
+	const struct firmware *fw;
+	u8 obj_buf[256];	/* an object is at most 256 bytes: its size - 1 is a u8 */
+	char *name;
+	size_t i;
+	int error;
+
+	name = kstrndup(buf, count, GFP_KERNEL);
+	if (!name)
+		return -ENOMEM;
+	name[strcspn(name, "\n")] = '\0';
+	error = request_firmware(&fw, name, dev);
+	kfree(name);
+	if (error)
+		return error;
+
+	disable_irq(data->irq);
+	for (i = 0; i < fw->size; ) {
+		const u8 *d = fw->data + i;
+		struct mxt_object *obj;
+		size_t len, size;
+		int ret;
+
+		if (fw->size - i <= 2 || d[1] + 1 > fw->size - i - 2) {
+			dev_warn(dev, "config: bad object entry at %zu\n", i);
+			error = -EINVAL;
+			break;
+		}
+		len = d[1] + 1;
+		i += 2 + len;
+
+		obj = mxt_get_object(data, d[0]);
+		if (!obj)
+			continue;
+
+		size = mxt_obj_size(obj);
+		memset(obj_buf, 0, size);
+		memcpy(obj_buf, d + 2, min(len, size));
+		ret = __mxt_write_reg(data->client, obj->start_address, size, obj_buf);
+		if (ret) {
+			dev_warn(dev, "config: T%u not written: %d\n", d[0], ret);
+			error = ret;
+		}
+	}
+	/* disable_ts and the wake gesture restore T7 from here */
+	if (data->T7_address)
+		__mxt_read_reg(data->client, data->T7_address, sizeof(data->t7_cfg), &data->t7_cfg);
+	enable_irq(data->irq);
+
+	release_firmware(fw);
+	return error ?: count;
+}
+
 static DEVICE_ATTR(wait_for_gesture, 0660, mxt_wait_for_gesture_show, mxt_wait_for_gesture_store);
 static DEVICE_ATTR(disable_ts, 0660, mxt_disable_ts_show, mxt_disable_ts_store);
 static DEVICE_ATTR(calibrate, 0200, NULL, mxt_calibrate_store);
+static DEVICE_ATTR(firmware_version, 0444, mxt_firmware_version_show, NULL);
+static DEVICE_ATTR(config_crc, 0400, mxt_config_crc_show, NULL);
+static DEVICE_ATTR(nv_config_crc, 0400, mxt_nv_config_crc_show, NULL);
+static DEVICE_ATTR(clear_config, 0200, NULL, mxt_clear_config_store);
+static DEVICE_ATTR(write_config, 0200, NULL, mxt_write_config_store);
 
 static DEVICE_ATTR(fw_version, S_IRUGO, mxt_fw_version_show, NULL);
 static DEVICE_ATTR(hw_version, S_IRUGO, mxt_hw_version_show, NULL);
@@ -3439,6 +3601,11 @@ static struct attribute *mxt_attrs[] = {
 	&dev_attr_wait_for_gesture.attr,
 	&dev_attr_disable_ts.attr,
 	&dev_attr_calibrate.attr,
+	&dev_attr_firmware_version.attr,
+	&dev_attr_config_crc.attr,
+	&dev_attr_nv_config_crc.attr,
+	&dev_attr_clear_config.attr,
+	&dev_attr_write_config.attr,
 	NULL
 };
 
