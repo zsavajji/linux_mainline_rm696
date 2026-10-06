@@ -74,6 +74,7 @@ struct panel_drv_data {
 
 	/* runtime variables */
 	bool enabled;
+	u8 id[3];	/* DCS ID1-ID3, read at each power on (hw_revision) */
 
 	bool te_enabled;
 
@@ -504,34 +505,14 @@ static ssize_t dsicm_num_errors_show(struct device *dev,
 	return sysfs_emit(buf, "%d\n", errors);
 }
 
+/* As Nokia's driver: the IDs read at the last power on, so also with the panel off */
 static ssize_t dsicm_hw_revision_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct panel_drv_data *ddata = dev_get_drvdata(dev);
-	struct omap_dss_device *in = ddata->in;
-	u8 id1, id2, id3;
-	int r;
 
-	mutex_lock(&ddata->lock);
-
-	if (ddata->enabled) {
-		in->ops.dsi->bus_lock(in);
-
-		r = dsicm_wake_up(ddata);
-		if (!r)
-			r = dsicm_get_id(ddata, &id1, &id2, &id3);
-
-		in->ops.dsi->bus_unlock(in);
-	} else {
-		r = -ENODEV;
-	}
-
-	mutex_unlock(&ddata->lock);
-
-	if (r)
-		return r;
-
-	return sysfs_emit(buf, "%02x.%02x.%02x\n", id1, id2, id3);
+	guard(mutex)(&ddata->lock);
+	return sysfs_emit(buf, "%02x.%02x.%02x\n", ddata->id[0], ddata->id[1], ddata->id[2]);
 }
 
 /* DCS WRITE_CTRL_DISPLAY: BL and BCTRL, with the Pyrenees' display dimming (DD) and HBM (bits 6-7) */
@@ -1105,7 +1086,6 @@ static void dsicm_hw_reset(struct panel_drv_data *ddata)
 static int dsicm_power_on(struct panel_drv_data *ddata)
 {
 	struct omap_dss_device *in = ddata->in;
-	u8 id1, id2, id3;
 	int r;
 	bool skip_init = omapdss_def_disp_enabled();
 	struct omap_dss_dsi_config dsi_config = {
@@ -1171,7 +1151,7 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 	if (r)
 		goto err;
 
-	r = dsicm_get_id(ddata, &id1, &id2, &id3);
+	r = dsicm_get_id(ddata, &ddata->id[0], &ddata->id[1], &ddata->id[2]);
 	if (r)
 		goto err;
 
@@ -1243,7 +1223,7 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 
 	if (!ddata->intro_printed) {
 		dev_info(&ddata->pdev->dev, "panel revision %02x.%02x.%02x\n",
-			id1, id2, id3);
+			ddata->id[0], ddata->id[1], ddata->id[2]);
 		ddata->intro_printed = true;
 	}
 
