@@ -121,6 +121,13 @@ static LIST_HEAD(panel_list);
 static DEFINE_MUTEX(panel_list_mutex);
 static int disp_num_counter;
 
+/*
+ * /sys/devices/omapdss/displayN, where 2.6.32's omapdss bus had the display devices and Harmattan
+ * reads the panel's attributes (mce and mxt_configure.sh: display0/hw_revision): links to the
+ * panel and connector devices
+ */
+static struct device *omapdss_root;
+
 int omapdss_register_display(struct omap_dss_device *dssdev)
 {
 	struct omap_dss_driver *drv = dssdev->driver;
@@ -160,6 +167,11 @@ int omapdss_register_display(struct omap_dss_device *dssdev)
 
 	mutex_lock(&panel_list_mutex);
 	list_add_tail(&dssdev->panel_list, &panel_list);
+	if (!omapdss_root)
+		omapdss_root = root_device_register("omapdss");
+	if (IS_ERR(omapdss_root) ||
+	    sysfs_create_link(&omapdss_root->kobj, &dssdev->dev->kobj, dssdev->alias))
+		DSSWARN("no /sys/devices/omapdss/%s\n", dssdev->alias);
 	mutex_unlock(&panel_list_mutex);
 	return 0;
 }
@@ -169,6 +181,8 @@ void omapdss_unregister_display(struct omap_dss_device *dssdev)
 {
 	mutex_lock(&panel_list_mutex);
 	list_del(&dssdev->panel_list);
+	if (!IS_ERR(omapdss_root))
+		sysfs_remove_link(&omapdss_root->kobj, dssdev->alias);
 	mutex_unlock(&panel_list_mutex);
 }
 EXPORT_SYMBOL(omapdss_unregister_display);
