@@ -140,20 +140,63 @@ static long media_device_enum_entities(struct media_device *mdev, void *arg)
 	return 0;
 }
 
-static void media_device_kpad_to_upad(const struct media_pad *kpad,
-				      struct media_pad_desc *upad)
+/*
+ * Harmattan's media API (Nokia's 2.6.32 kernel, before the merge) numbered entities 1..N in
+ * registration order, and its camera source counts up to N without MEDIA_ENT_ID_FLAG_NEXT,
+ * using the ids as list indexes: its ioctls see entities by their position
+ */
+static u32 nokia_entity_id(struct media_device *mdev, struct media_entity *entity)
+{
+	struct media_entity *e;
+	u32 id = 0;
+
+	media_device_for_each_entity(e, mdev) {
+		id++;
+		if (e == entity)
+			break;
+	}
+
+	return id;
+}
+
+static struct media_entity *nokia_find_entity(struct media_device *mdev, u32 id)
+{
+	struct media_entity *entity;
+	u32 n = 0;
+
+	if (id & MEDIA_ENT_ID_FLAG_NEXT)
+		id = (id & ~MEDIA_ENT_ID_FLAG_NEXT) + 1;
+
+	media_device_for_each_entity(entity, mdev)
+		if (++n == id)
+			return entity;
+
+	return NULL;
+}
+
+static void media_device_kpad_to_upad(struct media_device *mdev,
+				      const struct media_pad *kpad,
+				      struct media_pad_desc *upad, bool nokia)
 {
 	upad->entity = media_entity_id(kpad->entity);
 	upad->index = kpad->index;
 	upad->flags = kpad->flags;
+
+	/* Harmattan's pads were only sinks and sources */
+	if (nokia) {
+		upad->entity = nokia_entity_id(mdev, kpad->entity);
+		upad->flags &= MEDIA_PAD_FL_SINK | MEDIA_PAD_FL_SOURCE;
+	}
 }
 
-static long media_device_enum_links(struct media_device *mdev, void *arg)
+static long __media_device_enum_links(struct media_device *mdev, void *arg,
+				      bool nokia)
 {
 	struct media_links_enum *links = arg;
 	struct media_entity *entity;
 
-	entity = find_entity(mdev, links->entity);
+	entity = nokia ? nokia_find_entity(mdev, links->entity)
+		       : find_entity(mdev, links->entity);
 	if (entity == NULL)
 		return -EINVAL;
 
@@ -164,7 +207,8 @@ static long media_device_enum_links(struct media_device *mdev, void *arg)
 			struct media_pad_desc pad;
 
 			memset(&pad, 0, sizeof(pad));
-			media_device_kpad_to_upad(&entity->pads[p], &pad);
+			media_device_kpad_to_upad(mdev, &entity->pads[p], &pad,
+						  nokia);
 			if (copy_to_user(&links->pads[p], &pad, sizeof(pad)))
 				return -EFAULT;
 		}
@@ -181,10 +225,10 @@ static long media_device_enum_links(struct media_device *mdev, void *arg)
 			if (link->source->entity != entity)
 				continue;
 			memset(&klink_desc, 0, sizeof(klink_desc));
-			media_device_kpad_to_upad(link->source,
-						  &klink_desc.source);
-			media_device_kpad_to_upad(link->sink,
-						  &klink_desc.sink);
+			media_device_kpad_to_upad(mdev, link->source,
+						  &klink_desc.source, nokia);
+			media_device_kpad_to_upad(mdev, link->sink,
+						  &klink_desc.sink, nokia);
 			klink_desc.flags = link->flags;
 			if (copy_to_user(ulink_desc, &klink_desc,
 					 sizeof(*ulink_desc)))
@@ -197,7 +241,13 @@ static long media_device_enum_links(struct media_device *mdev, void *arg)
 	return 0;
 }
 
-static long media_device_setup_link(struct media_device *mdev, void *arg)
+static long media_device_enum_links(struct media_device *mdev, void *arg)
+{
+	return __media_device_enum_links(mdev, arg, false);
+}
+
+static long __media_device_setup_link(struct media_device *mdev, void *arg,
+				      bool nokia)
 {
 	struct media_link_desc *linkd = arg;
 	struct media_link *link = NULL;
@@ -206,8 +256,10 @@ static long media_device_setup_link(struct media_device *mdev, void *arg)
 
 	/* Find the source and sink entities and link.
 	 */
-	source = find_entity(mdev, linkd->source.entity);
-	sink = find_entity(mdev, linkd->sink.entity);
+	source = nokia ? nokia_find_entity(mdev, linkd->source.entity)
+		       : find_entity(mdev, linkd->source.entity);
+	sink = nokia ? nokia_find_entity(mdev, linkd->sink.entity)
+		     : find_entity(mdev, linkd->sink.entity);
 
 	if (source == NULL || sink == NULL)
 		return -EINVAL;
@@ -225,6 +277,39 @@ static long media_device_setup_link(struct media_device *mdev, void *arg)
 
 	/* Setup the link on both entities. */
 	return __media_entity_setup_link(link, linkd->flags);
+}
+
+static long media_device_setup_link(struct media_device *mdev, void *arg)
+{
+	return __media_device_setup_link(mdev, arg, false);
+}
+
+static long media_device_enum_entities_nokia(struct media_device *mdev,
+					     void *arg)
+{
+	struct media_entity_desc *entd = arg;
+	struct media_entity *ent;
+	long ret;
+
+	ent = nokia_find_entity(mdev, entd->id);
+	if (ent == NULL)
+		return -EINVAL;
+
+	entd->id = media_entity_id(ent);
+	ret = media_device_enum_entities(mdev, entd);
+	entd->id = nokia_entity_id(mdev, ent);
+
+	return ret;
+}
+
+static long media_device_enum_links_nokia(struct media_device *mdev, void *arg)
+{
+	return __media_device_enum_links(mdev, arg, true);
+}
+
+static long media_device_setup_link_nokia(struct media_device *mdev, void *arg)
+{
+	return __media_device_setup_link(mdev, arg, true);
 }
 
 static long media_device_get_topology(struct media_device *mdev, void *arg)
@@ -431,21 +516,43 @@ static const struct media_ioctl_info ioctl_info[] = {
 	MEDIA_IOC(REQUEST_ALLOC, media_device_request_alloc, 0),
 };
 
+/* Harmattan's media ioctls: the same structs, type 'M', numbers 1..4 */
+#define MEDIA_IOC_NOKIA(__nr, __type, func)				\
+	[__nr] = {							\
+		.cmd = _IOWR('M', __nr, __type),			\
+		.fn = func,						\
+		.flags = MEDIA_IOC_FL_GRAPH_MUTEX,			\
+		.arg_from_user = copy_arg_from_user,			\
+		.arg_to_user = copy_arg_to_user,			\
+	}
+
+static const struct media_ioctl_info nokia_ioctl_info[] = {
+	MEDIA_IOC_NOKIA(1, struct media_device_info, media_device_get_info),
+	MEDIA_IOC_NOKIA(2, struct media_entity_desc, media_device_enum_entities_nokia),
+	MEDIA_IOC_NOKIA(3, struct media_links_enum, media_device_enum_links_nokia),
+	MEDIA_IOC_NOKIA(4, struct media_link_desc, media_device_setup_link_nokia),
+};
+
 static long media_device_ioctl(struct file *filp, unsigned int cmd,
 			       unsigned long __arg)
 {
 	struct media_devnode *devnode = media_devnode_data(filp);
 	struct media_device *dev = devnode->media_dev;
-	const struct media_ioctl_info *info;
+	const struct media_ioctl_info *info, *table = ioctl_info;
+	unsigned int entries = ARRAY_SIZE(ioctl_info);
 	void __user *arg = (void __user *)__arg;
 	char __karg[256], *karg = __karg;
 	long ret;
 
-	if (_IOC_NR(cmd) >= ARRAY_SIZE(ioctl_info)
-	    || ioctl_info[_IOC_NR(cmd)].cmd != cmd)
+	if (_IOC_TYPE(cmd) == 'M') {
+		table = nokia_ioctl_info;
+		entries = ARRAY_SIZE(nokia_ioctl_info);
+	}
+
+	if (_IOC_NR(cmd) >= entries || table[_IOC_NR(cmd)].cmd != cmd)
 		return -ENOIOCTLCMD;
 
-	info = &ioctl_info[_IOC_NR(cmd)];
+	info = &table[_IOC_NR(cmd)];
 
 	if (_IOC_SIZE(info->cmd) > sizeof(__karg)) {
 		karg = kmalloc(_IOC_SIZE(info->cmd), GFP_KERNEL);
