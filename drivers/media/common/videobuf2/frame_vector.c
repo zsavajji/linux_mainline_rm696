@@ -37,6 +37,47 @@
  *
  * This function takes care of grabbing mmap_lock as necessary.
  */
+/*
+ * Harmattan's camera viewfinder queues omapfb's VRAM (a VM_IO | VM_PFNMAP mapping) as user
+ * pointers, as its 2.6.32 kernel's ISP driver took them: take the PFNs of such a mapping, as
+ * Linux did before 5.19 (no reference is held on them: meant for memory that outlives the
+ * mapping, like VRAM; dma-contig checks they are contiguous)
+ */
+static int get_vaddr_pfns(unsigned long start, unsigned int nr_frames,
+			  struct frame_vector *vec)
+{
+	struct mm_struct *mm = current->mm;
+	unsigned long *nums = (unsigned long *)vec->ptrs;
+	struct vm_area_struct *vma;
+	unsigned int i = 0;
+
+	mmap_read_lock(mm);
+	vma = vma_lookup(mm, start);
+	if (vma && (vma->vm_flags & (VM_IO | VM_PFNMAP))) {
+		for (; i < nr_frames; i++) {
+			struct follow_pfnmap_args args = {
+				.vma = vma,
+				.address = start + i * PAGE_SIZE,
+			};
+
+			if (args.address >= vma->vm_end ||
+			    follow_pfnmap_start(&args))
+				break;
+			nums[i] = args.pfn;
+			follow_pfnmap_end(&args);
+		}
+	}
+	mmap_read_unlock(mm);
+
+	if (!i)
+		return -EFAULT;
+
+	vec->got_ref = false;
+	vec->is_pfns = true;
+	vec->nr_frames = i;
+	return i;
+}
+
 int get_vaddr_frames(unsigned long start, unsigned int nr_frames, bool write,
 		     struct frame_vector *vec)
 {
@@ -61,6 +102,10 @@ int get_vaddr_frames(unsigned long start, unsigned int nr_frames, bool write,
 	vec->nr_frames = ret;
 
 	if (likely(ret > 0))
+		return ret;
+
+	ret = get_vaddr_pfns(start, nr_frames, vec);
+	if (ret > 0)
 		return ret;
 
 	vec->nr_frames = 0;
@@ -115,6 +160,12 @@ int frame_vector_to_pages(struct frame_vector *vec)
 
 	if (!vec->is_pfns)
 		return 0;
+	/*
+	 * The PFNs of a PFN mapping (get_vaddr_pfns()) may have struct pages but no kernel
+	 * mapping (VRAM carved out of RAM): keep them PFNs, mapped as a resource
+	 */
+	if (!vec->got_ref)
+		return -EINVAL;
 	nums = frame_vector_pfns(vec);
 	for (i = 0; i < vec->nr_frames; i++)
 		if (!pfn_valid(nums[i]))

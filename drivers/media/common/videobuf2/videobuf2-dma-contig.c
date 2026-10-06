@@ -571,9 +571,14 @@ static void *vb2_dc_get_userptr(struct vb2_buffer *vb, struct device *dev,
 	int ret = 0;
 	struct sg_table *sgt;
 	unsigned long contig_size;
-	unsigned long dma_align = dma_get_cache_alignment();
+	/*
+	 * Only cache aligned DMA transfers are reliable. 32 bytes at most, as the N9's 2011 ISP
+	 * driver took them (its DMA's own alignment): Harmattan's camera stack queues buffers
+	 * from allocators that align to that, and ARMv7 cleans the partial cache lines at either
+	 * end of a buffer before invalidating them.
+	 */
+	unsigned long dma_align = min(dma_get_cache_alignment(), 32);
 
-	/* Only cache aligned DMA transfers are reliable */
 	if (!IS_ALIGNED(vaddr | size, dma_align)) {
 		pr_debug("user data must be aligned to %lu bytes\n", dma_align);
 		return ERR_PTR(-EINVAL);
