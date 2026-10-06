@@ -865,6 +865,23 @@ static int preview_config(struct isp_prev_device *prev,
 	u32 update;
 	u32 active;
 
+	/*
+	 * Harmattan's preview (Nokia's 2011 driver): OMAP3ISP_PREV_GAMMA only loads the gamma
+	 * tables, and bit 11 (its OMAP3ISP_PREV_GAMMABYPASS) turns the correction off and on
+	 */
+	if ((cfg->update & OMAP3ISP_PREV_GAMMA) && !(cfg->flag & OMAP3ISP_PREV_GAMMA))
+		cfg->update &= ~OMAP3ISP_PREV_GAMMA;
+	if (cfg->update & BIT(11)) {
+		if (!(cfg->update & OMAP3ISP_PREV_GAMMA))
+			cfg->gamma = NULL;
+		cfg->update |= OMAP3ISP_PREV_GAMMA;
+		if (cfg->flag & BIT(11))
+			cfg->flag &= ~OMAP3ISP_PREV_GAMMA;
+		else
+			cfg->flag |= OMAP3ISP_PREV_GAMMA;
+		cfg->update &= ~BIT(11);
+	}
+
 	if (cfg->update == 0)
 		return 0;
 

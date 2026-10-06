@@ -2256,6 +2256,12 @@ static int isp_probe(struct platform_device *pdev)
 	spin_lock_init(&isp->stat_lock);
 	isp->dev = &pdev->dev;
 
+	/*
+	 * One IOMMU mapping per buffer: the default 64 KiB segment limit splits user pointer
+	 * buffers (and dma-contig then finds them not contiguous)
+	 */
+	dma_set_max_seg_size(isp->dev, UINT_MAX);
+
 	isp->ref_count = 0;
 
 	ret = dma_coerce_mask_and_coherent(isp->dev, DMA_BIT_MASK(32));

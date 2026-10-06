@@ -327,7 +327,8 @@ void omap3_core_dpll_restore_context(struct clk_hw *hw);
 extern const struct clk_hw_omap_ops clkhwops_omap2xxx_dpll;
 
 /* OMAP3 CORE/L3 scaling (mach-omap2/clkt34xx_dpll3m2.c): L3 at OPP100 while held; hold may sleep */
-enum omap3_l3_user { OMAP3_L3_CPU, OMAP3_L3_SGX, OMAP3_L3_DSS, OMAP3_L3_USB, OMAP3_L3_WLAN, OMAP3_L3_USERS };
+enum omap3_l3_user { OMAP3_L3_CPU, OMAP3_L3_SGX, OMAP3_L3_DSS, OMAP3_L3_USB, OMAP3_L3_WLAN, OMAP3_L3_ISP,
+		     OMAP3_L3_USERS };
 #ifdef CONFIG_ARCH_OMAP3
 void omap3_l3_hold(enum omap3_l3_user who);
 void omap3_l3_release(enum omap3_l3_user who);

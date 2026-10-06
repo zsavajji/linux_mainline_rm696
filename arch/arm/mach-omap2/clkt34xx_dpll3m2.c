@@ -150,7 +150,7 @@ static struct clk *l3_m2;
 static unsigned long l3_high, l3_low;	/* dpll3_m2_ck rates */
 static DEFINE_MUTEX(l3_lock);
 static int l3_holds[OMAP3_L3_USERS];
-static const char * const l3_names[OMAP3_L3_USERS] = { "cpu", "sgx", "dss", "usb", "wlan" };
+static const char * const l3_names[OMAP3_L3_USERS] = { "cpu", "sgx", "dss", "usb", "wlan", "isp" };
 static unsigned long l3_ignored;	/* debugfs omap3_l3 "-user": holds not counted, for tests */
 static int l3_forced;			/* debugfs omap3_l3: 0 auto, 1 low, 2 high */
 static bool l3_cpu_high;

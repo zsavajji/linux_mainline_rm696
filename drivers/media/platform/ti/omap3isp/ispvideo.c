@@ -11,6 +11,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/clk/ti.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/pagemap.h>
@@ -647,8 +648,8 @@ isp_video_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 	strscpy(cap->card, video->video.name, sizeof(cap->card));
 	strscpy(cap->bus_info, "media", sizeof(cap->bus_info));
 
-	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_OUTPUT
-		| V4L2_CAP_STREAMING | V4L2_CAP_DEVICE_CAPS;
+	/* Each node's own direction, as Nokia's driver (Harmattan's camera library asks) */
+	cap->capabilities = video->video.device_caps | V4L2_CAP_DEVICE_CAPS;
 
 
 	return 0;
@@ -941,7 +942,11 @@ isp_video_dqbuf(struct file *file, void *fh, struct v4l2_buffer *b)
 	int ret;
 
 	mutex_lock(&video->queue_lock);
-	ret = vb2_dqbuf(&vfh->queue, b, file->f_flags & O_NONBLOCK);
+	/* Nokia's driver didn't wait for a buffer that was never queued */
+	if (!vfh->queue.queued_count)
+		ret = -EINVAL;
+	else
+		ret = vb2_dqbuf(&vfh->queue, b, file->f_flags & O_NONBLOCK);
 	mutex_unlock(&video->queue_lock);
 
 	return ret;
@@ -1086,6 +1091,12 @@ isp_video_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
 
 	mutex_lock(&video->stream_lock);
 
+	/* Streaming already, through any file handle: Nokia's driver refused */
+	if (video->queue) {
+		mutex_unlock(&video->stream_lock);
+		return -EBUSY;
+	}
+
 	/* Start streaming on the pipeline. No link touching an entity in the
 	 * pipeline can be activated or deactivated once streaming is started.
 	 */
@@ -1095,7 +1106,8 @@ isp_video_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
 	if (ret)
 		goto err_enum_init;
 
-	/* TODO: Implement PM QoS */
+	/* L3 at OPP100 while streaming, as Nokia's omap_pm_set_min_bus_tput(740000) did */
+	omap3_l3_hold(OMAP3_L3_ISP);
 	pipe->l3_ick = clk_get_rate(video->isp->clock[ISP_CLK_L3_ICK]);
 	pipe->max_rate = pipe->l3_ick;
 
@@ -1158,7 +1170,7 @@ isp_video_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
 err_check_format:
 	video_device_pipeline_stop(&video->video);
 err_pipeline_start:
-	/* TODO: Implement PM QoS */
+	omap3_l3_release(OMAP3_L3_ISP);
 	/* The DMA queue must be emptied here, otherwise CCDC interrupts that
 	 * will get triggered the next time the CCDC is powered up will try to
 	 * access buffers that might have been freed but still present in the
@@ -1222,8 +1234,8 @@ isp_video_streamoff(struct file *file, void *fh, enum v4l2_buf_type type)
 	video->queue = NULL;
 	video->error = false;
 
-	/* TODO: Implement PM QoS */
 	video_device_pipeline_stop(&video->video);
+	omap3_l3_release(OMAP3_L3_ISP);
 
 	media_entity_enum_cleanup(&pipe->ent_enum);
 

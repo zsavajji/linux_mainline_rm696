@@ -1477,6 +1477,11 @@ static void ccdc_hs_vs_isr(struct isp_ccdc_device *ccdc)
 	event.u.frame_sync.frame_sequence = atomic_read(&pipe->frame_number);
 
 	v4l2_event_queue(vdev, &event);
+
+	/* Harmattan's 3A library takes each frame's sequence and time from this one */
+	memset(&event, 0, sizeof(event));
+	event.type = V4L2_EVENT_OMAP3ISP_HS_VS;
+	v4l2_event_queue(vdev, &event);
 }
 
 /*
@@ -1863,7 +1868,8 @@ static long ccdc_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static int ccdc_subscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh,
 				struct v4l2_event_subscription *sub)
 {
-	if (sub->type != V4L2_EVENT_FRAME_SYNC)
+	if (sub->type != V4L2_EVENT_FRAME_SYNC &&
+	    sub->type != V4L2_EVENT_OMAP3ISP_HS_VS)
 		return -EINVAL;
 
 	/* line number is zero at frame start */

@@ -233,7 +233,8 @@ static int isp_stat_buf_queue(struct ispstat *stat)
 	if (!stat->active_buf)
 		return STAT_NO_BUF;
 
-	ktime_get_ts64(&stat->active_buf->ts);
+	/* Wall-clock time, as Nokia's driver (do_gettimeofday()) gave Harmattan */
+	ktime_get_real_ts64(&stat->active_buf->ts);
 
 	stat->active_buf->buf_size = stat->buf_size;
 	if (isp_stat_buf_check_magic(stat, stat->active_buf)) {

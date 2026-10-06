@@ -16,6 +16,8 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 
+#include <media/v4l2-common.h>
+
 #include "isp.h"
 #include "ispreg.h"
 #include "ispcsiphy.h"
@@ -160,12 +162,25 @@ static int csiphy_set_power(struct isp_csiphy *phy, u32 power)
 #define TCLK_MISS	1
 #define TCLK_SETTLE	14
 
+/* The link frequency of the sensor's source pad, if it tells */
+static s64 csiphy_link_freq(struct v4l2_subdev *sd)
+{
+	unsigned int i;
+
+	for (i = 0; i < sd->entity.num_pads; i++)
+		if (sd->entity.pads[i].flags & MEDIA_PAD_FL_SOURCE)
+			return v4l2_get_link_freq(&sd->entity.pads[i], 0, 0);
+
+	return -ENOENT;
+}
+
 static int omap3isp_csiphy_config(struct isp_csiphy *phy)
 {
 	struct isp_pipeline *pipe = to_isp_pipeline(phy->entity);
 	struct isp_bus_cfg *buscfg;
 	struct isp_csiphy_lanes_cfg *lanes;
 	int csi2_ddrclk_khz;
+	s64 link_freq;
 	unsigned int num_data_lanes, used_lanes = 0;
 	unsigned int i;
 	u32 reg;
@@ -211,10 +226,18 @@ static int omap3isp_csiphy_config(struct isp_csiphy *phy)
 	csiphy_routing_cfg(phy, buscfg->interface, true,
 			   buscfg->bus.ccp2.phy_layer);
 
-	/* DPHY timing configuration */
-	/* CSI-2 is DDR and we only count used lanes. */
-	csi2_ddrclk_khz = pipe->external_rate / 1000
-		/ (2 * hweight32(used_lanes)) * pipe->external_width;
+	/*
+	 * DPHY timing configuration: from the DDR clock, which is the link frequency where the
+	 * sensor gives one (as the N9's board file computed it, from the mode's output clock:
+	 * the average pixel rate below falls short of it with horizontal blanking)
+	 */
+	link_freq = csiphy_link_freq(pipe->external);
+	if (link_freq > 0)
+		csi2_ddrclk_khz = div_s64(link_freq, 1000);
+	else
+		/* CSI-2 is DDR and we only count used lanes. */
+		csi2_ddrclk_khz = pipe->external_rate / 1000
+			/ (2 * hweight32(used_lanes)) * pipe->external_width;
 
 	reg = isp_reg_readl(phy->isp, phy->phy_regs, ISPCSIPHY_REG0);
 

@@ -72,6 +72,8 @@
 #define V4L2_EVENT_OMAP3ISP_AEWB	(V4L2_EVENT_OMAP3ISP_CLASS | 0x1)
 #define V4L2_EVENT_OMAP3ISP_AF		(V4L2_EVENT_OMAP3ISP_CLASS | 0x2)
 #define V4L2_EVENT_OMAP3ISP_HIST	(V4L2_EVENT_OMAP3ISP_CLASS | 0x3)
+/* Harmattan's (Nokia's 2011 driver): an empty event at each CCDC HS/VS interrupt */
+#define V4L2_EVENT_OMAP3ISP_HS_VS	(V4L2_EVENT_OMAP3ISP_CLASS | 0x4)
 
 struct omap3isp_stat_event_status {
 	__u32 frame_number;
