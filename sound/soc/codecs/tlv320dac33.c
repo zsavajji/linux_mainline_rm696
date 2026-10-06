@@ -36,6 +36,7 @@
 #define DAC33_FIFO_SIZE_16BIT	6144
 #define DAC33_FIFO_SIZE_24BIT	4096
 #define DAC33_MODE7_MARGIN	10	/* Safety margin for FIFO in Mode7 */
+#define DAC33_FALLBACK_TO_BYPASS_US	40000	/* Bypass for periods this short */
 
 #define BURST_BASEFREQ_HZ	49152000
 
@@ -86,7 +87,8 @@ struct tlv320dac33_priv {
 	unsigned int refclk;
 
 	unsigned int alarm_threshold;	/* set to be half of LATENCY_TIME_MS */
-	enum dac33_fifo_modes fifo_mode;/* FIFO mode selection */
+	enum dac33_fifo_modes user_fifo_mode;	/* FIFO mode selection */
+	enum dac33_fifo_modes fifo_mode;	/* Active FIFO mode */
 	unsigned int fifo_size;		/* Size of the FIFO in samples */
 	unsigned int nsample;		/* burst read amount from host */
 	int mode1_latency;		/* latency caused by the i2c writes in
@@ -446,7 +448,7 @@ static int dac33_get_fifo_mode(struct snd_kcontrol *kcontrol,
 	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
 	struct tlv320dac33_priv *dac33 = snd_soc_component_get_drvdata(component);
 
-	ucontrol->value.enumerated.item[0] = dac33->fifo_mode;
+	ucontrol->value.enumerated.item[0] = dac33->user_fifo_mode;
 
 	return 0;
 }
@@ -458,7 +460,7 @@ static int dac33_set_fifo_mode(struct snd_kcontrol *kcontrol,
 	struct tlv320dac33_priv *dac33 = snd_soc_component_get_drvdata(component);
 	int ret = 0;
 
-	if (dac33->fifo_mode == ucontrol->value.enumerated.item[0])
+	if (dac33->user_fifo_mode == ucontrol->value.enumerated.item[0])
 		return 0;
 	/* Do not allow changes while stream is running*/
 	if (snd_soc_component_active(component))
@@ -467,7 +469,7 @@ static int dac33_set_fifo_mode(struct snd_kcontrol *kcontrol,
 	if (ucontrol->value.enumerated.item[0] >= DAC33_FIFO_LAST_MODE)
 		ret = -EINVAL;
 	else
-		dac33->fifo_mode = ucontrol->value.enumerated.item[0];
+		dac33->user_fifo_mode = ucontrol->value.enumerated.item[0];
 
 	return ret;
 }
@@ -845,6 +847,13 @@ static int dac33_hw_params(struct snd_pcm_substream *substream,
 			params_width(params));
 		return -EINVAL;
 	}
+
+	/* As Nokia's: the selected FIFO mode, but bypass for short periods */
+	dac33->fifo_mode = dac33->user_fifo_mode;
+	if (dac33->fifo_mode &&
+	    SAMPLES_TO_US(params_rate(params), params_period_size(params)) <=
+	    DAC33_FALLBACK_TO_BYPASS_US)
+		dac33->fifo_mode = DAC33_FIFO_BYPASS;
 
 	return 0;
 }
@@ -1505,7 +1514,7 @@ static int dac33_i2c_probe(struct i2c_client *client)
 		dac33->mode1_latency = 10000; /* 10ms */
 	dac33->irq = client->irq;
 	/* Disable FIFO use by default */
-	dac33->fifo_mode = DAC33_FIFO_BYPASS;
+	dac33->user_fifo_mode = DAC33_FIFO_BYPASS;
 
 	/* request optional reset GPIO */
 	dac33->reset_gpiod =
