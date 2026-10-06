@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
+#include <linux/property.h>
 #include <linux/interrupt.h>
 #include <linux/gpio/consumer.h>
 #include <linux/regulator/consumer.h>
@@ -1475,6 +1476,7 @@ static int dac33_i2c_probe(struct i2c_client *client)
 {
 	struct tlv320dac33_priv *dac33;
 	int ret, i;
+	u32 val;
 
 	dac33 = devm_kzalloc(&client->dev, sizeof(struct tlv320dac33_priv),
 			     GFP_KERNEL);
@@ -1492,8 +1494,13 @@ static int dac33_i2c_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, dac33);
 
+	/* BCLK divider in the FIFO modes' bursts (BCLK = 49.152 MHz / div) */
+	if (!device_property_read_u32(&client->dev, "ti,burst-bclkdiv", &val))
+		dac33->burst_bclkdiv = val;
 	if (!dac33->burst_bclkdiv)
 		dac33->burst_bclkdiv = 8;
+	/* BCLK running between the FIFO modes' bursts too */
+	dac33->keep_bclk = device_property_read_bool(&client->dev, "ti,keep-bclk");
 	if (!dac33->mode1_latency)
 		dac33->mode1_latency = 10000; /* 10ms */
 	dac33->irq = client->irq;
