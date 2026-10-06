@@ -1182,11 +1182,11 @@ void musb_ep_restart(struct musb *musb, struct musb_request *req)
 		if (csr & MUSB_RXCSR_RXPKTRDY) {
 			musb->g_rx_pending |= BIT(req->epnum);
 			schedule_work(&musb->g_rx_work);
-			return;
 		}
-		csr |= MUSB_RXCSR_FLUSHFIFO | MUSB_RXCSR_P_WZC_BITS;
-		musb_writew(epio, MUSB_RXCSR, csr);
-		musb_writew(epio, MUSB_RXCSR, csr);
+		/*
+		 * Else the RX interrupt reads the next packet into it. No FIFO flush: a packet
+		 * arriving during one came out with length 0 (a mass storage command lost)
+		 */
 	}
 }
 
