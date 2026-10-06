@@ -396,26 +396,6 @@
 	polling-delay = <5000>;
 };
 
-/*
- * The clocksource and sched_clock on GPT10, fed by the 19.2 MHz system clock: a read of the 32 kHz
- * counter crosses the wakeup L4 (19.2 MHz interconnect, ~780 ns at 1 GHz), one of a CORE timer the
- * core L4 (~250 ns); the scheduler reads it on every switch and wakeup. Also 52 ns resolution
- * instead of 30.5 us. The CORE domain never leaves ON on this kernel, so GPT10 always counts (with
- * CORE retention, its running clock would keep CORE on). The 32 kHz counter stays, at a lower
- * rating; the clockevent stays on GPT1 (always on).
- */
-&timer10_target {
-	ti,no-reset-on-init;
-	ti,no-idle;
-};
-
-&timer10 {
-	/delete-property/ ti,timer-pwm;
-	assigned-clocks = <&gpt10_fck>;
-	assigned-clock-parents = <&sys_ck>;
-	ti,timer-clocksource;
-};
-
 /* The touchscreen, as stock's board file (board-rm696-peripherals.c): IRQ GPIO 61, reset GPIO 81 */
 &i2c2 {
 	touchscreen@4b {
