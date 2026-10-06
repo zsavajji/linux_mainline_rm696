@@ -132,6 +132,25 @@
 #define PMBR1				0x0D
 #define GPIO_USB_4PIN_ULPI_2430C	(3 << 0)
 
+/* In module TWL5031_MODULE_BCC, after Nokia's twl5031-bcc.c (N9 2.6.32) */
+#define TWL5031_BCC_CTRL2		0x01
+#define TWL5031_CHGMODE_SW		BIT(0)
+#define TWL5031_SW_USBCHRG_EN		BIT(1)
+#define TWL5031_SW_CHRG_DET		BIT(3)
+#define TWL5031_SW_USB_DET_EN		BIT(4)
+#define TWL5031_BCC_STS			0x02
+#define TWL5031_USB_DET_STS_MASK	(BIT(1) | BIT(0))
+#define TWL5031_USB_DET_STS_100MA	1
+#define TWL5031_USB_DET_STS_500MA	2
+#define TWL5031_USB_P_STS		BIT(2)
+#define TWL5031_BATTERY_PRESENCE_STS	BIT(4)
+#define TWL5031_BCC_STS_RESET		0xaa	/* no VBUS, no charger: the BCC in reset */
+#define TWL5031_USB_CHRG_CTRL1		0x03
+#define TWL5031_USB_SW_CTRL_EN		BIT(0)
+#define TWL5031_CHGD_IDX_SRC_EN_LOWV	BIT(1)
+#define TWL5031_CHGD_SERX_EN_LOWV	BIT(3)
+#define TWL5031_CHGD_SERX_DP_LOWV	BIT(5)
+
 static irqreturn_t twl4030_usb_irq(int irq, void *_twl);
 /*
  * If VBUS is valid or ID is ground, then we know a
@@ -165,8 +184,11 @@ struct twl4030_usb {
 	bool			musb_mailbox_pending;
 	unsigned long		runtime_suspended:1;
 	unsigned long		needs_resume:1;
+	bool			powered;	/* supplies on, PHY powered up */
+	bool			dcd;		/* the last charger detection saw data contact */
 
 	struct delayed_work	id_workaround_work;
+	struct work_struct	charger_work;
 };
 
 /* internal define on top of container_of */
@@ -431,12 +453,16 @@ static int __maybe_unused twl4030_usb_runtime_suspend(struct device *dev)
 
 	dev_dbg(twl->dev, "%s\n", __func__);
 
+	twl->runtime_suspended = 1;
+	/* already off: charger detection powers the PHY down while the cable stays */
+	if (!twl->powered)
+		return 0;
+	twl->powered = false;
+
 	__twl4030_phy_power(twl, 0);
 	regulator_disable(twl->usb1v5);
 	regulator_disable(twl->usb1v8);
 	regulator_disable(twl->usb3v1);
-
-	twl->runtime_suspended = 1;
 
 	return 0;
 }
@@ -447,6 +473,10 @@ static int __maybe_unused twl4030_usb_runtime_resume(struct device *dev)
 	int res;
 
 	dev_dbg(twl->dev, "%s\n", __func__);
+
+	if (twl->powered)
+		return 0;
+	twl->powered = true;
 
 	res = regulator_enable(twl->usb3v1);
 	if (res)
@@ -487,6 +517,199 @@ static int __maybe_unused twl4030_usb_runtime_resume(struct device *dev)
 	 */
 	msleep(50);
 	return 0;
+}
+
+/*
+ * Nokia's charger detection on the TWL5031, from twl5031-bcc.c in the N9's 2.6.32 kernel (its
+ * twl4030-core flagged the USB PHY can_detect_charger on a TWL5031): on VBUS, with the PHY powered
+ * down, data contact detection (DCD), then the BCC's detection state machine, then for a charging
+ * port D+'s line state with its pull-up on. Only then may the gadget connect (stock's
+ * USB_EVENT_TRY_CONN), and only after DCD and not to a dedicated charger. The result is the
+ * usb_phy's charger type and state, for the "usb" power supply BME reads.
+ */
+static int twl5031_bcc_read(u8 reg)
+{
+	u8 val;
+	int ret = twl_i2c_read_u8(TWL5031_MODULE_BCC, &val, reg);
+
+	return ret ? ret : val;
+}
+
+static int twl5031_bcc_write(u8 reg, u8 val)
+{
+	return twl_i2c_write_u8(TWL5031_MODULE_BCC, val, reg);
+}
+
+/* DCD: D+ pulled low against a small current source once the data pins touch */
+static bool twl5031_dcd(struct twl4030_usb *twl)
+{
+	const u8 dcd = TWL5031_USB_SW_CTRL_EN | TWL5031_CHGD_IDX_SRC_EN_LOWV |
+		       TWL5031_CHGD_SERX_EN_LOWV;
+	unsigned long timeout;
+	bool online = false;
+	int res;
+
+	/* DCD init: enable DP source and DM pulldown */
+	res = twl5031_bcc_read(TWL5031_USB_CHRG_CTRL1);
+	if (res < 0 || twl5031_bcc_write(TWL5031_USB_CHRG_CTRL1, res | dcd) < 0)
+		return false;
+
+	/* Nokia: "twl5031 specification claims for typical value of 2.72 sec", made 3 s */
+	timeout = jiffies + msecs_to_jiffies(3000);
+	do {
+		/* read comparator output */
+		res = twl5031_bcc_read(TWL5031_USB_CHRG_CTRL1);
+		if (res < 0)
+			break;
+		if (!(res & TWL5031_CHGD_SERX_DP_LOWV)) {
+			online = true;
+			break;
+		}
+		cpu_relax();
+	} while (!time_after(jiffies, timeout));
+
+	/* DCD de-init: disable DP source and DM pulldown */
+	res = twl5031_bcc_read(TWL5031_USB_CHRG_CTRL1);
+	if (res >= 0)
+		twl5031_bcc_write(TWL5031_USB_CHRG_CTRL1, res & ~dcd);
+
+	return online;
+}
+
+/* A charging port: with D+ pulled up, a dedicated charger (D+ shorted to D-) reads SE1 */
+static enum usb_charger_type twl5031_charging_port(struct twl4030_usb *twl)
+{
+	int func_ctrl, otg_ctrl, linestate;
+
+	/* The transceiver must be resumed before this operation */
+	twl4030_usb_runtime_resume(twl->dev);
+
+	func_ctrl = twl4030_usb_read(twl, ULPI_FUNC_CTRL);
+	otg_ctrl = twl4030_usb_read(twl, ULPI_OTG_CTRL);
+	if (func_ctrl < 0 || otg_ctrl < 0)
+		return CDP_TYPE;
+
+	/* disable pulldowns */
+	twl4030_usb_clear_bits(twl, ULPI_OTG_CTRL,
+			       ULPI_OTG_CTRL_DM_PULLDOWN | ULPI_OTG_CTRL_DP_PULLDOWN);
+	/* full speed */
+	twl4030_usb_clear_bits(twl, ULPI_FUNC_CTRL, ULPI_FUNC_CTRL_XCVRSEL_MASK);
+	twl4030_usb_set_bits(twl, ULPI_FUNC_CTRL, ULPI_FUNC_CTRL_FULL_SPEED);
+	/* enable DP pullup */
+	twl4030_usb_set_bits(twl, ULPI_FUNC_CTRL, ULPI_FUNC_CTRL_TERMSELECT);
+	udelay(100);
+
+	linestate = twl4030_usb_read(twl, ULPI_DEBUG);
+
+	twl4030_usb_write(twl, ULPI_FUNC_CTRL, func_ctrl);
+	twl4030_usb_write(twl, ULPI_OTG_CTRL, otg_ctrl);
+
+	if (linestate < 0 || (linestate & (ULPI_DEBUG_LINESTATE0 | ULPI_DEBUG_LINESTATE1)) !=
+			     (ULPI_DEBUG_LINESTATE0 | ULPI_DEBUG_LINESTATE1))
+		return CDP_TYPE;
+
+	twl4030_usb_runtime_suspend(twl->dev);
+	return DCP_TYPE;
+}
+
+/*
+ * The usb_phy's charger_detect, from usb_phy_set_charger_state(). The BCC writes are stock's: the
+ * DCD sources, the hand-over of the current sources to the state machine (SW_CTRL_EN off), and
+ * BCC_CTRL2's software charge mode with USB charging on for a charger found and off for none.
+ * No current or voltage limit: BME sets those.
+ */
+static enum usb_charger_type twl5031_charger_detect(struct usb_phy *phy)
+{
+	struct twl4030_usb *twl = phy_to_twl(phy);
+	enum usb_charger_type type = UNKNOWN_TYPE;
+	unsigned long timeout;
+	bool usb3v1;
+	int res, ctl;
+
+	/* disable all regulators + put the transceiver into nondriving mode */
+	twl4030_usb_runtime_suspend(twl->dev);
+
+	/* this particular regulator is required for DCD */
+	usb3v1 = !regulator_enable(twl->usb3v1);
+
+	/* perform DCD to secure following charger detection */
+	twl->dcd = twl5031_dcd(twl);
+	if (!twl->dcd)
+		dev_notice(twl->dev, "dcd failed\n");	/* ignore error and force charger detection */
+
+	/* Let USB dedicated FSM to control current sources */
+	res = twl5031_bcc_read(TWL5031_USB_CHRG_CTRL1);
+	if (res < 0 ||
+	    twl5031_bcc_write(TWL5031_USB_CHRG_CTRL1, res & ~TWL5031_USB_SW_CTRL_EN) < 0)
+		goto out;
+
+	/* Enable USB FSM (STM mode) */
+	ctl = twl5031_bcc_read(TWL5031_BCC_CTRL2);
+	if (ctl < 0)
+		goto out;
+	ctl |= TWL5031_CHGMODE_SW | TWL5031_SW_USB_DET_EN;
+	if (twl5031_bcc_write(TWL5031_BCC_CTRL2, ctl) < 0)
+		goto out;
+
+	/* Read status: until 500 mA, for 300 ms; once if DCD failed */
+	timeout = jiffies + msecs_to_jiffies(300);
+	do {
+		res = twl5031_bcc_read(TWL5031_BCC_STS);
+		if (res < 0 || res == TWL5031_BCC_STS_RESET)
+			continue;
+		if (!(res & TWL5031_BATTERY_PRESENCE_STS)) {
+			dev_err_ratelimited(twl->dev, "no battery present\n");
+			continue;
+		}
+		/* USB charger and battery presence bits should be high */
+		if (!(res & TWL5031_USB_P_STS))
+			continue;
+		res &= TWL5031_USB_DET_STS_MASK;
+		if (res == TWL5031_USB_DET_STS_500MA)
+			break;
+	} while (!time_after(jiffies, timeout) && twl->dcd);
+
+	switch (res) {
+	case TWL5031_USB_DET_STS_500MA:
+		ctl |= TWL5031_SW_CHRG_DET | TWL5031_SW_USBCHRG_EN;
+		type = twl5031_charging_port(twl);
+		break;
+	case TWL5031_USB_DET_STS_100MA:
+		ctl |= TWL5031_SW_USBCHRG_EN;
+		type = SDP_TYPE;
+		break;
+	default:
+		ctl &= ~TWL5031_SW_USBCHRG_EN;
+		/*
+		 * Nothing found: stock left the port a standard downstream one and, after DCD,
+		 * connected; its power supply then went present once the host configured the phone
+		 */
+		if (twl->dcd)
+			type = SDP_TYPE;
+		break;
+	}
+	dev_dbg(twl->dev, "charger detection: STS %02x, type %d, dcd %d\n", res, type, twl->dcd);
+
+	ctl &= ~TWL5031_SW_USB_DET_EN;	/* save result, stop FSM */
+	twl5031_bcc_write(TWL5031_BCC_CTRL2, ctl);
+out:
+	if (usb3v1)
+		regulator_disable(twl->usb3v1);
+	return type;
+}
+
+static void twl5031_charger_work(struct work_struct *work)
+{
+	struct twl4030_usb *twl = container_of(work, struct twl4030_usb, charger_work);
+
+	usb_phy_set_charger_state(&twl->phy, USB_CHARGER_PRESENT);
+	if (!twl->dcd || twl->phy.chg_type == DCP_TYPE)
+		return;
+
+	/* stock's USB_EVENT_TRY_CONN: the PHY up, musb told of VBUS */
+	twl4030_usb_runtime_resume(twl->dev);
+	if (musb_mailbox(MUSB_VBUS_VALID))
+		twl->musb_mailbox_pending = true;
 }
 
 static int twl4030_phy_power_off(struct phy *phy)
@@ -592,12 +815,20 @@ static irqreturn_t twl4030_usb_irq(int irq, void *_twl)
 			dev_dbg(twl->dev, "%s: cable connected %i\n",
 				__func__, status);
 			pm_runtime_get_sync(twl->dev);
-			twl->musb_mailbox_pending = true;
+			/* VBUS from a host or charger: musb hears of it after detection */
+			if (status == MUSB_VBUS_VALID && twl->phy.charger_detect)
+				schedule_work(&twl->charger_work);
+			else
+				twl->musb_mailbox_pending = true;
 		}
 	} else {
 		if (atomic_add_unless(&twl->connected, -1, 0)) {
 			dev_dbg(twl->dev, "%s: cable disconnected %i\n",
 				__func__, status);
+			if (twl->phy.charger_detect) {
+				cancel_work_sync(&twl->charger_work);
+				usb_phy_set_charger_state(&twl->phy, USB_CHARGER_ABSENT);
+			}
 			pm_runtime_mark_last_busy(twl->dev);
 			pm_runtime_put_autosuspend(twl->dev);
 			twl->musb_mailbox_pending = true;
@@ -740,6 +971,9 @@ static int twl4030_usb_probe(struct platform_device *pdev)
 	mutex_init(&twl->lock);
 
 	INIT_DELAYED_WORK(&twl->id_workaround_work, twl4030_id_workaround_work);
+	INIT_WORK(&twl->charger_work, twl5031_charger_work);
+	if (np && of_device_is_compatible(np->parent, "ti,twl5031"))
+		twl->phy.charger_detect = twl5031_charger_detect;
 
 	err = twl4030_usb_ldo_init(twl);
 	if (err) {
@@ -795,6 +1029,7 @@ static void twl4030_usb_remove(struct platform_device *pdev)
 	usb_remove_phy(&twl->phy);
 	pm_runtime_get_sync(twl->dev);
 	cancel_delayed_work_sync(&twl->id_workaround_work);
+	cancel_work_sync(&twl->charger_work);
 	device_remove_file(twl->dev, &dev_attr_vbus);
 
 	/* set transceiver mode to power on defaults */
