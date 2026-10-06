@@ -519,12 +519,12 @@ config CHARGER_MAX8903
 	  handlers.
 
 config CHARGER_TWL5031_BCC
-	tristate "TWL5031 charger presence (Nokia N9)"
-	depends on TWL4030_CORE
+	tristate "TWL5031 charger presence and type (Nokia N9)"
+	depends on TWL4030_CORE && USB_PHY
 	help
-	  The TWL5031's charger presence as the "usb" and "vac" power supplies
-	  that the Nokia N9's battery daemon (BME) reads; BME drives the
-	  charger itself.
+	  The TWL5031's charger presence, and the type the USB PHY detected,
+	  as the "usb" and "vac" power supplies that the Nokia N9's battery
+	  daemon (BME) reads; BME drives the charger itself.
 
 config CHARGER_TWL4030
 	tristate "OMAP TWL4030 BCI charger driver"
