@@ -36,6 +36,7 @@
 #include "sdrc.h"
 #include "sram.h"
 #include "voltage.h"
+#include "pm.h"
 
 #define CYCLES_PER_MHZ			1000000
 
@@ -124,6 +125,12 @@ int omap3_core_dpll_m2_set_rate(unsigned long rate, unsigned long clkrate, u32 n
 
 	if (vdd2 && rate < clkrate)
 		voltdm_scale(vdd2, vdd2_uv(sdrcrate));
+
+	/*
+	 * After CORE OFF the ROM relocks DPLL3 and reprograms the SDRC from the scratchpad: the
+	 * current ones, as Nokia's kernel (resource34xx.c, after every VDD2 OPP change)
+	 */
+	omap3_save_scratchpad_contents();
 out:
 	if (!IS_ERR(sdrc_ick))
 		clk_put(sdrc_ick);
@@ -244,6 +251,8 @@ static int l3_cpufreq_cb(struct notifier_block *nb, unsigned long val, void *dat
 	struct cpufreq_freqs *f = data;
 
 	if (val == CPUFREQ_POSTCHANGE) {
+		/* the ROM relocks DPLL1 from the scratchpad after CORE OFF, as for DPLL3 above */
+		omap3_save_scratchpad_contents();
 		/* a new scaling_min_freq counts from the next frequency change */
 		WRITE_ONCE(l3_cpu_high, f->new > f->policy->min);
 		schedule_work(&l3_cpu);

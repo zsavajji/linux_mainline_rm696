@@ -235,6 +235,10 @@ void omap3_save_scratchpad_contents(void)
 	struct omap3_scratchpad scratchpad_contents;
 	struct omap3_scratchpad_prcm_block prcm_block_contents;
 	struct omap3_scratchpad_sdrc_block sdrc_block_contents;
+	unsigned long flags;
+
+	/* Saved again after each DPLL1/DPLL3 change: one snapshot of the registers at a time */
+	local_irq_save(flags);
 
 	/*
 	 * Populate the Scratchpad contents
@@ -347,6 +351,8 @@ void omap3_save_scratchpad_contents(void)
 	memcpy_toio(scratchpad_address +
 		scratchpad_contents.sdrc_block_offset +
 		sizeof(sdrc_block_contents), &arm_context_addr, 4);
+
+	local_irq_restore(flags);
 }
 
 void omap3_control_save_context(void)
