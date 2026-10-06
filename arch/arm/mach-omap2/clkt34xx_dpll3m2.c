@@ -37,6 +37,8 @@
 #include "sram.h"
 #include "voltage.h"
 #include "pm.h"
+#include "prcm-common.h"
+#include "cm2xxx_3xxx.h"
 
 #define CYCLES_PER_MHZ			1000000
 
@@ -164,6 +166,40 @@ static bool l3_cpu_high;
 static unsigned long l3_since;		/* jiffies at the last accounting */
 static u64 l3_ms[2];			/* time at OPP100, OPP50 */
 static unsigned long l3_switches;
+
+/*
+ * DM3730 erratum 1.85 workaround 2, as Nokia's kernel (resource34xx.c, program_vdd2_opp_dll_wa(),
+ * called from omap_sram_idle() with DPLL3 set to automatic around CORE retention and OFF): DPLL3 may
+ * stop only with L3 at OPP50 and VDD2 at OPP100's voltage. Outside idle it stays locked (workaround
+ * 1, policy init). Called with interrupts off: register accesses and the voltage processor only.
+ * ponytail: with L3 at OPP100 (some user holds it) CORE stays ON for that idle instead of L3 being
+ * lowered there as Nokia's did; every hold but the CPU's keeps CORE out of retention anyway.
+ */
+#define CM_CLKSEL1_PLL_CORE_M2_SHIFT	27
+#define CM_CLKSEL1_PLL_CORE_M2_MASK	(0x1f << CM_CLKSEL1_PLL_CORE_M2_SHIFT)
+#define CM_AUTOIDLE_PLL_AUTO_CORE_MASK	0x7
+
+static struct voltagedomain *wa_vdd2;
+static u32 wa_m2_low;			/* CM_CLKSEL1_PLL's M2 at L3 OPP50; 0 until the policy runs */
+
+bool omap3_l3_idle_enter(void)
+{
+	u32 m2 = (omap2_cm_read_mod_reg(PLL_MOD, CM_CLKSEL1) & CM_CLKSEL1_PLL_CORE_M2_MASK) >>
+		 CM_CLKSEL1_PLL_CORE_M2_SHIFT;
+
+	if (!wa_m2_low || m2 != wa_m2_low)
+		return false;
+	if (voltdm_scale_noirq(wa_vdd2, VDD2_OPP100_UV))
+		return false;
+	omap2_cm_rmw_mod_reg_bits(CM_AUTOIDLE_PLL_AUTO_CORE_MASK, 1, PLL_MOD, CM_AUTOIDLE);
+	return true;
+}
+
+void omap3_l3_idle_exit(void)
+{
+	omap2_cm_rmw_mod_reg_bits(CM_AUTOIDLE_PLL_AUTO_CORE_MASK, 0, PLL_MOD, CM_AUTOIDLE);
+	voltdm_scale_noirq(wa_vdd2, VDD2_OPP50_UV);
+}
 
 static void l3_account(void)
 {
@@ -350,6 +386,11 @@ static int __init omap3_l3_policy_init(void)
 	vdd2 = voltdm_lookup("core");
 	if (vdd2)
 		voltdm_scale(vdd2, VDD2_OPP100_UV);
+	/* L3 is at OPP100 now: OPP50's M2 is twice this one (l3_low) */
+	wa_vdd2 = vdd2;
+	if (vdd2)
+		wa_m2_low = 2 * ((omap2_cm_read_mod_reg(PLL_MOD, CM_CLKSEL1) &
+				  CM_CLKSEL1_PLL_CORE_M2_MASK) >> CM_CLKSEL1_PLL_CORE_M2_SHIFT);
 	policy = cpufreq_cpu_get(0);
 	l3_cpu_high = !policy || policy->cur > policy->min;
 	if (policy)

@@ -127,6 +127,15 @@ int voltdm_scale(struct voltagedomain *voltdm,
 	return omap_sr_scale(voltdm, target_volt, _voltdm_scale);
 }
 
+/*
+ * voltdm_scale() without SmartReflex's lock, for the idle path (interrupts off): only while
+ * SmartReflex isn't running on the domain (class 1.5 between its calibrations).
+ */
+int voltdm_scale_noirq(struct voltagedomain *voltdm, unsigned long target_volt)
+{
+	return _voltdm_scale(voltdm, target_volt);
+}
+
 /**
  * voltdm_reset() - Resets the voltage of a particular voltage domain
  *		    to that of the current OPP.

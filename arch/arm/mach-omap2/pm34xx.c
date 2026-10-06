@@ -218,7 +218,7 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	int per_next_state = PWRDM_POWER_ON;
 	int core_next_state = PWRDM_POWER_ON;
 	u32 sdrc_pwr = 0;
-	bool core_off_refused = false;
+	bool core_off_refused = false, per_off_refused = false;
 	int error;
 
 	mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
@@ -256,14 +256,35 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		core_next_state = PWRDM_POWER_ON;
 		pwrdm_set_next_pwrst(core_pwrdm, core_next_state);
 	}
+	/*
+	 * Erratum 1.85 workaround 2 (omap3_l3_idle_enter()): CORE leaves ON only with DPLL3 allowed to
+	 * stop, at L3 OPP50 with VDD2 at OPP100's voltage; else it stays ON, and PER above OFF. Not
+	 * tried while a CORE functional clock runs (CORE can't idle then: Nokia's cpuidle checked
+	 * pwrdm_can_idle(core) first), so VDD2 isn't moved for nothing.
+	 */
+	if (core_next_state < PWRDM_POWER_ON &&
+	    ((omap2_cm_read_mod_reg(CORE_MOD, CM_FCLKEN1) |
+	      omap2_cm_read_mod_reg(CORE_MOD, OMAP3430ES2_CM_FCLKEN3)) ||
+	     !omap3_l3_idle_enter())) {
+		core_next_state = PWRDM_POWER_ON;
+		pwrdm_set_next_pwrst(core_pwrdm, core_next_state);
+		if (per_next_state == PWRDM_POWER_OFF) {
+			per_next_state = PWRDM_POWER_RET;
+			pwrdm_set_next_pwrst(per_pwrdm, per_next_state);
+			per_off_refused = true;
+		}
+	}
 
 	pwrdm_pre_transition(NULL);
 
 	/* PER */
 	if (per_next_state == PWRDM_POWER_OFF) {
 		error = cpu_cluster_pm_enter();
-		if (error)
+		if (error) {
+			if (core_next_state < PWRDM_POWER_ON)
+				omap3_l3_idle_exit();
 			return;
+		}
 	}
 
 	/* CORE */
@@ -344,6 +365,9 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		omap3_intc_resume_idle();
 	}
 
+	if (core_next_state < PWRDM_POWER_ON)
+		omap3_l3_idle_exit();
+
 	pwrdm_post_transition(NULL);
 
 	/* PER */
@@ -352,6 +376,8 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 
 	if (core_off_refused)
 		pwrdm_set_next_pwrst(core_pwrdm, PWRDM_POWER_OFF);
+	if (per_off_refused)
+		pwrdm_set_next_pwrst(per_pwrdm, PWRDM_POWER_OFF);
 }
 
 static void omap3_pm_idle(void)

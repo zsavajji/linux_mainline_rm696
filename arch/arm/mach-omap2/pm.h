@@ -63,6 +63,8 @@ extern struct am33xx_pm_sram_addr am33xx_pm_sram;
 extern struct am33xx_pm_sram_addr am43xx_pm_sram;
 
 extern void omap3_save_scratchpad_contents(void);
+extern bool omap3_l3_idle_enter(void);
+extern void omap3_l3_idle_exit(void);
 
 #define PM_RTA_ERRATUM_i608		(1 << 0)
 #define PM_SDRC_WAKEUP_ERRATUM_i583	(1 << 1)

@@ -166,5 +166,6 @@ struct voltagedomain *voltdm_lookup(const char *name);
 void voltdm_init(struct voltagedomain **voltdm_list);
 void voltdm_reset(struct voltagedomain *voltdm);
 int voltdm_scale(struct voltagedomain *voltdm, unsigned long target_volt);
+int voltdm_scale_noirq(struct voltagedomain *voltdm, unsigned long target_volt);
 unsigned long voltdm_get_voltage(struct voltagedomain *voltdm);
 #endif
