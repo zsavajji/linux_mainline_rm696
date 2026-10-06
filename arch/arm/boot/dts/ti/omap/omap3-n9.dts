@@ -418,10 +418,14 @@
 	};
 };
 
-/* The charger's presence for BME (twl5031-bcc.patch); BME drives the charger itself */
+/*
+ * The charger's presence and type for BME (twl5031-bcc.patch); BME drives the charger itself. The
+ * type comes from the USB PHY's charger detection
+ */
 &twl {
 	bcc {
 		compatible = "ti,twl5031-bcc";
+		usb-phy = <&usb2_phy>;
 	};
 };
 
