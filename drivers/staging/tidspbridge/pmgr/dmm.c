@@ -51,10 +51,11 @@ struct dmm_object {
 	spinlock_t dmm_lock;	/* Lock to access dmm mgr */
 };
 
+/* sizes in pages: wide enough for DMMPOOLSIZE (15 bits held 128 MiB), as Nokia's */
 struct map_page {
-	u32 region_size:15;
-	u32 mapped_size:15;
+	u32 region_size:31;
 	u32 reserved:1;
+	u32 mapped_size:31;
 	u32 mapped:1;
 };
 

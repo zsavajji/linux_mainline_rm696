@@ -29,7 +29,12 @@ struct dmm_mgrattrs {
 	u32 reserved;
 };
 
-#define DMMPOOLSIZE      0x4000000
+/*
+ * The DSP virtual address space for user buffers, from the base image's EXT_END: 256 MiB as
+ * Nokia's bridge (Harmattan's camera maps three 8 Mpixel UYVY frames of 15.9 MiB for a still, next
+ * to the viewfinder's buffers; v3.16's 64 MiB ran out)
+ */
+#define DMMPOOLSIZE      0x10000000
 
 /*
  *  ======== dmm_get_handle ========
