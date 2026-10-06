@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config VIDEO_NOKIA_SMIAPP
+	tristate "Nokia N9 cameras: Harmattan's SMIA/SMIA++ driver"
+	depends on I2C && VIDEO_DEV && OF && COMMON_CLK && !64BIT
+	select MEDIA_CONTROLLER
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_FWNODE
+	help
+	  Nokia's driver for the N9's main and front camera modules, as Harmattan's camera
+	  userspace expects it: the sensor modes come from Nokia's register-list firmware
+	  (smiapp-sensor-*.bin, smia-sensor-*.bin), the subdev names, controls and sysfs
+	  files are stock's. Also the N9's camera board glue.
+
+config VIDEO_NOKIA_AD58XX
+	tristate "Nokia N9 cameras: Harmattan's AD58xx lens driver"
+	depends on VIDEO_NOKIA_SMIAPP
+	help
+	  Nokia's driver for the voice coil lens actuator of the N9's main camera.
+
+config VIDEO_NOKIA_AS3645A
+	tristate "Nokia N9 cameras: Harmattan's AS3645A flash driver"
+	depends on VIDEO_NOKIA_SMIAPP && !LEDS_AS3645A
+	help
+	  Nokia's V4L2 subdev driver for the N9's camera flash and its indicator LED, as
+	  Harmattan's camera userspace drives them.
