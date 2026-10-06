@@ -1102,9 +1102,15 @@ isp_video_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
 	 */
 	pipe = to_isp_pipeline(&video->video.entity) ? : &video->pipe;
 
-	ret = media_entity_enum_init(&pipe->ent_enum, &video->isp->media_dev);
-	if (ret)
-		goto err_enum_init;
+	/*
+	 * Harmattan's camera streams several video nodes in one pipeline: the first allocates the
+	 * pipeline's entity enumeration, the last to stop frees it
+	 */
+	if (!pipe->pipe.start_count) {
+		ret = media_entity_enum_init(&pipe->ent_enum, &video->isp->media_dev);
+		if (ret)
+			goto err_enum_init;
+	}
 
 	/* L3 at OPP100 while streaming, as Nokia's omap_pm_set_min_bus_tput(740000) did */
 	omap3_l3_hold(OMAP3_L3_ISP);
@@ -1181,7 +1187,8 @@ err_pipeline_start:
 	INIT_LIST_HEAD(&video->dmaqueue);
 	video->queue = NULL;
 
-	media_entity_enum_cleanup(&pipe->ent_enum);
+	if (!pipe->pipe.start_count)
+		media_entity_enum_cleanup(&pipe->ent_enum);
 
 err_enum_init:
 	mutex_unlock(&video->stream_lock);
@@ -1237,7 +1244,8 @@ isp_video_streamoff(struct file *file, void *fh, enum v4l2_buf_type type)
 	video_device_pipeline_stop(&video->video);
 	omap3_l3_release(OMAP3_L3_ISP);
 
-	media_entity_enum_cleanup(&pipe->ent_enum);
+	if (!pipe->pipe.start_count)
+		media_entity_enum_cleanup(&pipe->ent_enum);
 
 done:
 	mutex_unlock(&video->stream_lock);

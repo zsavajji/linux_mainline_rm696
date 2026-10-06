@@ -868,6 +868,11 @@ int omap3isp_pipeline_set_stream(struct isp_pipeline *pipe,
 {
 	int ret;
 
+	/* Each video node's STREAMOFF stops the pipeline: once is enough */
+	if (state == ISP_PIPELINE_STREAM_STOPPED &&
+	    pipe->stream_state == ISP_PIPELINE_STREAM_STOPPED)
+		return 0;
+
 	if (state == ISP_PIPELINE_STREAM_STOPPED)
 		ret = isp_pipeline_disable(pipe);
 	else
