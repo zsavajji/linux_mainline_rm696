@@ -770,6 +770,17 @@ config NETFILTER_XTABLES_LEGACY
 
 comment "Xtables combined modules"
 
+config NETFILTER_XT_CONDITION
+	tristate '"condition" match and "CONDITION" target support'
+	depends on NETFILTER_ADVANCED
+	depends on PROC_FS
+	help
+	  This option adds the "condition" match and "CONDITION" target of
+	  Nokia's N9 kernel: rules match and set condition variables, which
+	  are also read and written in /proc/net/nf_condition.
+
+	  To compile it as a module, choose M here.  If unsure, say N.
+
 config NETFILTER_XT_MARK
 	tristate 'nfmark target and match support'
 	default m if NETFILTER_ADVANCED=n
