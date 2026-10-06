@@ -350,6 +350,30 @@ int snd_soc_dai_set_tristate(struct snd_soc_dai *dai, int tristate)
 }
 EXPORT_SYMBOL_GPL(snd_soc_dai_set_tristate);
 
+/**
+ * snd_soc_request_power_level - request a runtime power level of the CPU DAI
+ * @substream: the running stream
+ * @level: SND_SOC_PM_INACTIVE or SND_SOC_PM_ACTIVE
+ *
+ * For a codec with a FIFO of its own, which reads the CPU DAI in bursts:
+ * between them the CPU DAI can be inactive. Called from the codec's
+ * interrupt handler too, so the op must not sleep.
+ */
+int snd_soc_request_power_level(struct snd_pcm_substream *substream,
+				enum snd_soc_power_level level)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *dai = snd_soc_rtd_to_cpu(rtd, 0);
+	int ret = 0;
+
+	if (dai->driver->ops &&
+	    dai->driver->ops->request_power_level)
+		ret = dai->driver->ops->request_power_level(substream, level, dai);
+
+	return soc_dai_ret(dai, ret);
+}
+EXPORT_SYMBOL_GPL(snd_soc_request_power_level);
+
 int snd_soc_dai_prepare(struct snd_soc_dai *dai,
 			struct snd_pcm_substream *substream)
 {

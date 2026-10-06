@@ -161,6 +161,12 @@ struct snd_soc_dai_driver;
 struct snd_soc_dai;
 struct snd_ac97_bus_ops;
 
+/* Runtime power levels a codec can request from the CPU DAI */
+enum snd_soc_power_level {
+	SND_SOC_PM_INACTIVE,
+	SND_SOC_PM_ACTIVE,
+};
+
 /* Digital Audio Interface clocking API.*/
 int snd_soc_dai_set_sysclk(struct snd_soc_dai *dai, int clk_id,
 	unsigned int freq, int dir);
@@ -186,6 +192,9 @@ int snd_soc_dai_set_channel_map(struct snd_soc_dai *dai,
 	unsigned int rx_num, const unsigned int *rx_slot);
 
 int snd_soc_dai_set_tristate(struct snd_soc_dai *dai, int tristate);
+
+int snd_soc_request_power_level(struct snd_pcm_substream *substream,
+				enum snd_soc_power_level level);
 
 int snd_soc_dai_prepare(struct snd_soc_dai *dai,
 			struct snd_pcm_substream *substream);
@@ -345,6 +354,13 @@ struct snd_soc_dai_ops {
 	 */
 	snd_pcm_sframes_t (*delay)(struct snd_pcm_substream *,
 		struct snd_soc_dai *);
+
+	/*
+	 * For requesting runtime power level change on DAI.
+	 * Optional.
+	 */
+	int (*request_power_level)(struct snd_pcm_substream *,
+		enum snd_soc_power_level, struct snd_soc_dai *);
 
 	/*
 	 * Format list for auto selection.
