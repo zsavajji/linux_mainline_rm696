@@ -361,11 +361,39 @@ restore:
 #define omap3_pm_suspend NULL
 #endif /* CONFIG_SUSPEND */
 
+/*
+ * DM3730 erratum 1.107 (SPRZ319F): after a warm reset that followed an IO wakeup from OFF with
+ * ST_IO still set, USBHOST, SGX, CAM, DSS and PER can't start their sleep transitions. Workaround:
+ * a sleep dependency on the MPU for at least 2 SYS_CLK cycles. Nokia's N9 kernel did it at boot
+ * (pm34xx.c, prcm_setup_regs(), with 100 us); the registers' other bits (clockdomain autodeps)
+ * are kept.
+ */
+static void __init omap3_erratum_1_107(void)
+{
+	static const s16 mods[] = {
+		OMAP3430ES2_USBHOST_MOD, OMAP3430ES2_SGX_MOD, OMAP3430_CAM_MOD,
+		OMAP3430_DSS_MOD, OMAP3430_PER_MOD,
+	};
+	u32 v[ARRAY_SIZE(mods)];
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(mods); i++) {
+		v[i] = omap2_cm_read_mod_reg(mods[i], OMAP3430_CM_SLEEPDEP);
+		omap2_cm_write_mod_reg(v[i] | OMAP3430_EN_MPU_MASK, mods[i], OMAP3430_CM_SLEEPDEP);
+	}
+	udelay(100);
+	for (i = 0; i < ARRAY_SIZE(mods); i++)
+		omap2_cm_write_mod_reg(v[i], mods[i], OMAP3430_CM_SLEEPDEP);
+}
+
 static void __init prcm_setup_regs(void)
 {
 	omap3_ctrl_init();
 
 	omap3_prm_init_pm(cpu_is_omap3630(), omap3_has_iva());
+
+	if (cpu_is_omap3630())
+		omap3_erratum_1_107();
 }
 
 void omap3_pm_off_mode_enable(int enable)
