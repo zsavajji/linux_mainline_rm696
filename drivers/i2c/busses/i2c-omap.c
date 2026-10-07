@@ -1197,6 +1197,10 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
 	int ret;
 	struct omap_i2c_dev *omap = dev_id;
 
+	/* A late interrupt after the transfer ended: the controller may be clock-gated already */
+	if (pm_runtime_suspended(omap->dev))
+		return IRQ_NONE;
+
 	ret = omap_i2c_xfer_data(omap);
 	if (ret != -EAGAIN)
 		omap_i2c_complete_cmd(omap, ret);
