@@ -38,13 +38,13 @@
 #define FIRMWARE_TI1271_PRELE	"nokia/ti1273_prele.bin"
 
 /*
- * The TI1271 at 921600 after its firmware, with TI's own command for it (as hci_ll for WiLink).
- * The firmware leaves it at 3.69 Mbaud, the rate Nokia's hci_h4p ran it at (ti_baud=3692300 keeps
- * it for the next power-on): ~225 KB/s each way in loopback against ~67 at 921600, but a file
- * transfer with a phone stalled on a corrupt ACL frame, with a break on the line (Nokia N9,
- * 2026-10-07); loopback never let the chip sleep. 921600 until that is understood.
+ * The TI1271 at 3.69 Mbaud after its firmware, the rate the firmware leaves it at and Nokia's
+ * hci_h4p ran it at: ~220 KB/s each way in loopback against ~68 at 921600. ti_baud picks another
+ * for the next power-on, set with TI's own command (as hci_ll for WiLink). 921600 was the default
+ * while the chip's first frame after a wakeup could arrive misframed at 3.69 Mbaud (8250_omap
+ * raised RTS before its configuration-mode access, Nokia N9, 2026-10-07).
  */
-#define TI1271_BAUD_RATE		921600
+#define TI1271_BAUD_RATE		3692300
 #define HCI_VS_UPDATE_UART_HCI_BAUDRATE	0xff36
 
 static unsigned int ti_baud = TI1271_BAUD_RATE;
