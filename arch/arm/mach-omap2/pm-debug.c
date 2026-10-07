@@ -266,6 +266,7 @@ static int __init pm_dbg_init(void)
 			    &off_mode_armed, &pm_dbg_option_fops);
 	debugfs_create_u32("secure_ram_saves", 0444, d, &omap3_secure_ram_saves);
 	debugfs_create_u32("secure_ram_save_fails", 0444, d, &omap3_secure_ram_save_fails);
+	debugfs_create_u32("secure_ram_save_positive", 0444, d, &omap3_secure_ram_save_positive);
 	debugfs_create_x32("secure_ram_save_ret", 0444, d, &omap3_secure_ram_save_ret);
 	pm_dbg_init_done = 1;
 

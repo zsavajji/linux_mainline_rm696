@@ -95,17 +95,19 @@ static void omap3_core_restore_context(void)
 	omap_intc_restore_context();
 }
 
-/* pm_debug: secure RAM saves, failed ones, the last failure's return value */
-u32 omap3_secure_ram_saves, omap3_secure_ram_save_fails, omap3_secure_ram_save_ret;
+/* pm_debug: secure RAM saves, negative and positive returns, the last nonzero return value */
+u32 omap3_secure_ram_saves, omap3_secure_ram_save_fails, omap3_secure_ram_save_positive;
+u32 omap3_secure_ram_save_ret;
 
 /*
  * The HS secure RAM's image, which the ROM restores after CORE OFF. Saved at boot and at every
  * CORE OFF entry, as Nokia's N9 kernel (pm34xx.c, omap_sram_idle(): the secure calls change the
- * secure state). Returns nonzero when it couldn't be saved: CORE must not go OFF then.
+ * secure state). As there, a negative return is a failure and CORE must not go OFF; a positive
+ * one counts as saved (Nokia's: "secure_ram_save_status >= 0"). On the N9 most saves return 1.
  */
 static int omap3_save_secure_ram_context(void)
 {
-	u32 ret;
+	int ret;
 	int mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
 
 	if (omap_type() == OMAP2_DEVICE_TYPE_GP)
@@ -123,9 +125,12 @@ static int omap3_save_secure_ram_context(void)
 				    OMAP3_SAVE_SECURE_RAM_SZ);
 	pwrdm_set_next_pwrst(mpu_pwrdm, mpu_next_state);
 	omap3_secure_ram_saves++;
-	if (ret) {
-		omap3_secure_ram_save_fails++;
+	if (ret)
 		omap3_secure_ram_save_ret = ret;
+	if (ret > 0)
+		omap3_secure_ram_save_positive++;
+	if (ret < 0) {
+		omap3_secure_ram_save_fails++;
 		pr_err_ratelimited("save_secure_sram() returns %08x\n", ret);
 	}
 
@@ -404,7 +409,7 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	 * The secure RAM image, after the INTC change as stock (the ROM's save does a WFI too). No
 	 * fresh image, no CORE OFF: retention this time
 	 */
-	if (core_next_state == PWRDM_POWER_OFF && omap3_save_secure_ram_context()) {
+	if (core_next_state == PWRDM_POWER_OFF && omap3_save_secure_ram_context() < 0) {
 		core_next_state = PWRDM_POWER_RET;
 		pwrdm_set_next_pwrst(core_pwrdm, core_next_state);
 		omap3_vc_set_pmic_signaling(core_next_state);

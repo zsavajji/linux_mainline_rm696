@@ -28,7 +28,8 @@ static inline int omap4_idle_init(void)
 #endif
 
 extern phys_addr_t omap3_secure_ram_storage;
-extern u32 omap3_secure_ram_saves, omap3_secure_ram_save_fails, omap3_secure_ram_save_ret;
+extern u32 omap3_secure_ram_saves, omap3_secure_ram_save_fails, omap3_secure_ram_save_positive;
+extern u32 omap3_secure_ram_save_ret;
 extern void omap3_pm_off_mode_enable(int);
 extern void omap_sram_idle(bool rcuidle);
 extern int omap_pm_clkdms_setup(struct clockdomain *clkdm, void *unused);
