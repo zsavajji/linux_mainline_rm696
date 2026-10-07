@@ -814,6 +814,7 @@ static int venc_bind(struct device *dev, struct device *master, void *data)
 	mutex_init(&venc.venc_lock);
 
 	venc.wss_data = 0;
+	venc.timings = omap_dss_pal_timings;
 
 	venc_mem = platform_get_resource(venc.pdev, IORESOURCE_MEM, 0);
 	if (!venc_mem) {
