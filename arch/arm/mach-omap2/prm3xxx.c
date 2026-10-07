@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/irq.h>
+#include <linux/of.h>
 #include <linux/of_irq.h>
 
 #include "soc.h"
@@ -128,6 +129,8 @@ u32 omap3_prm_vcvp_rmw(u32 mask, u32 bits, u8 offset)
 	return omap2_prm_rmw_mod_reg_bits(mask, bits, OMAP3430_GR_MOD, offset);
 }
 
+static u32 omap3xxx_prm_reset_bit = OMAP_RST_DPLL3_MASK;
+
 /**
  * omap3xxx_prm_dpll3_reset - use DPLL3 reset to reboot the OMAP SoC
  *
@@ -137,7 +140,7 @@ u32 omap3_prm_vcvp_rmw(u32 mask, u32 bits, u8 offset)
  */
 static void omap3xxx_prm_dpll3_reset(void)
 {
-	omap2_prm_set_mod_reg_bits(OMAP_RST_DPLL3_MASK, OMAP3430_GR_MOD,
+	omap2_prm_set_mod_reg_bits(omap3xxx_prm_reset_bit, OMAP3430_GR_MOD,
 				   OMAP2_RM_RSTCTRL);
 	/* OCP barrier */
 	omap2_prm_read_mod_reg(OMAP3430_GR_MOD, OMAP2_RM_RSTCTRL);
@@ -673,6 +676,16 @@ static struct prm_ll_data omap3xxx_prm_ll_data = {
 
 int __init omap3xxx_prm_init(const struct omap_prcm_init_data *data)
 {
+	/*
+	 * Nokia's N9 reboots with the global software reset, as its kernel did (prcm.c). TI: "The
+	 * PRCM on OMAP3 will drive SYS_OFFMODE low during DPLL3 warm reset, which causes the Gaia
+	 * sleep script to execute, usually killing VDD1 and VDD2 while code is running"; with
+	 * Nokia's sleep script loaded the N9 stayed off after one. SPRZ319F's warm reset hang
+	 * (1.78) affects ES1.0 only.
+	 */
+	if (of_machine_is_compatible("nokia,omap3-n9"))
+		omap3xxx_prm_reset_bit = OMAP_RST_GS_MASK;
+
 	omap2_clk_legacy_provider_init(TI_CLKM_PRM,
 				       prm_base.va + OMAP3430_IVA2_MOD);
 	if (omap3_has_io_wakeup())
