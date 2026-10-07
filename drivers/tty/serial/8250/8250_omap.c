@@ -184,9 +184,18 @@ static void __omap8250_set_mctrl(struct uart_port *port, unsigned int mctrl)
 {
 	struct uart_8250_port *up = up_to_u8250p(port);
 	struct omap8250_priv *priv = port->private_data;
+	bool autorts = (mctrl & TIOCM_RTS) && (port->status & UPSTAT_AUTORTS);
 	u8 lcr;
 
-	serial8250_do_set_mctrl(port, mctrl);
+	/*
+	 * RTS raised with autoRTS: MCR only after the EFR. The EFR is reached in configuration
+	 * mode B, LCR 0xbf, which is also parity and two stop bits: a character the remote starts
+	 * as soon as it sees RTS, while the LCR still reads 0xbf, gets a framing and parity error
+	 * and the characters after it are misframed (a Bluetooth chip waiting for RTS, at 3.69
+	 * Mbaud). Raised from the MCR, RTS went up before the LCR read and the three writes.
+	 */
+	if (!autorts)
+		serial8250_do_set_mctrl(port, mctrl);
 
 	if (!mctrl_gpio_to_gpiod(up->gpios, UART_GPIO_RTS)) {
 		/*
@@ -195,13 +204,16 @@ static void __omap8250_set_mctrl(struct uart_port *port, unsigned int mctrl)
 		 */
 		lcr = serial_in(up, UART_LCR);
 		serial_out(up, UART_LCR, UART_LCR_CONF_MODE_B);
-		if ((mctrl & TIOCM_RTS) && (port->status & UPSTAT_AUTORTS))
+		if (autorts)
 			priv->efr |= UART_EFR_RTS;
 		else
 			priv->efr &= ~UART_EFR_RTS;
 		serial_out(up, UART_EFR, priv->efr);
 		serial_out(up, UART_LCR, lcr);
 	}
+
+	if (autorts)
+		serial8250_do_set_mctrl(port, mctrl);
 }
 
 static void omap8250_set_mctrl(struct uart_port *port, unsigned int mctrl)
