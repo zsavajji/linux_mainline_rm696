@@ -524,6 +524,8 @@ static void cs_hsi_write_on_control_complete(struct hsi_msg *msg)
 		hi->control_state &= ~SSI_CHANNEL_STATE_WRITING;
 		cs_release_cmd(msg);
 		spin_unlock(&hi->lock);
+		/* cs_hsi_command() waits for this without hi->lock */
+		wake_up_interruptible(&hi->datawait);
 	} else if (msg->status == HSI_STATUS_ERROR) {
 		cs_hsi_control_write_error(hi, msg);
 	} else {
@@ -750,6 +752,18 @@ static unsigned int cs_hsi_get_state(struct cs_hsi_iface *hi)
 static int cs_hsi_command(struct cs_hsi_iface *hi, u32 cmd)
 {
 	int ret = 0;
+
+	/*
+	 * A control write completes once its frame has gone out, and only
+	 * one can be pending. libcmtspeechdata sends some back to back
+	 * (NEW_TIMING_CONFIG_REQ right after SPEECH_CONFIG_RESP) and doesn't
+	 * retry: wait for the previous one rather than fail with -EBUSY.
+	 */
+	if ((cmd & TARGET_MASK) == TARGET_REMOTE &&
+	    wait_event_interruptible_timeout(hi->datawait,
+			!(hi->control_state & SSI_CHANNEL_STATE_WRITING),
+			msecs_to_jiffies(CS_HSI_TRANSFER_TIMEOUT_MS)) < 0)
+		return -ERESTARTSYS;
 
 	local_bh_disable();
 	switch (cmd & TARGET_MASK) {
