@@ -34,6 +34,7 @@
 #include "../codecs/wl1273.h"
 
 static struct gpio_desc *dfl61_ihf_gpio;
+static struct gpio_desc *dfl61_tvout_gpio;	/* TVOUT_EN: the AV jack in video mode when high */
 static struct snd_soc_card dfl61_twl_card;
 static struct snd_soc_card dfl61_dac33_card;
 static struct snd_soc_jack dfl61_jack;
@@ -46,7 +47,8 @@ static struct iio_channel *dfl61_hsmic;		/* MADC ADCIN10: the headset mic line *
  * TV-out cables SND_JACK_AVOUT, open cables SND_JACK_LINEOUT, anything else, wrong-pinout plugs
  * (CTIA vs OMTP) included, SND_JACK_MECHANICAL: Harmattan's policy calls that incompatible and keeps
  * the speaker. Nokia's ECI accessories (remotes, carkits) come out as headsets; their buttons and a
- * basic headset's are below.
+ * basic headset's are below. As stock, TVOUT_EN goes low (audio) at each plug, before the
+ * classification, and high (video) for a TV-out cable, before it's reported; an unplug leaves it.
  */
 static int dfl61_jack_detect(void *data);
 
@@ -943,6 +945,7 @@ static int dfl61_jack_detect(void *data)
 		aci_power(false);
 		return 0;
 	}
+	gpiod_set_value_cansleep(dfl61_tvout_gpio, 0);
 	if (!dfl61_hsmic)
 		return SND_JACK_HEADPHONE;	/* no MADC channel: no classification */
 
@@ -981,6 +984,8 @@ static int dfl61_jack_detect(void *data)
 		 what, mv[0], mv[1], mv[2], tries + 1);
 	if (buttons)
 		aci_buttons_on(buttons);
+	if (type == SND_JACK_AVOUT)
+		gpiod_set_value_cansleep(dfl61_tvout_gpio, 1);
 	return type;
 }
 
@@ -1241,6 +1246,9 @@ static int dfl61_probe(struct platform_device *pdev)
 		dfl61_ihf_gpio = devm_gpiod_get(&pdev->dev, "ihf", GPIOD_OUT_LOW);
 		if (IS_ERR(dfl61_ihf_gpio))
 			return dev_err_probe(&pdev->dev, PTR_ERR(dfl61_ihf_gpio), "no ihf gpio\n");
+		dfl61_tvout_gpio = devm_gpiod_get_optional(&pdev->dev, "tvout", GPIOD_OUT_LOW);
+		if (IS_ERR(dfl61_tvout_gpio))
+			return dev_err_probe(&pdev->dev, PTR_ERR(dfl61_tvout_gpio), "no tvout gpio\n");
 		/* the MADC's headset mic channel, for accessory classification (optional) */
 		dfl61_hsmic = devm_iio_channel_get(&pdev->dev, "hsmic");
 		if (IS_ERR(dfl61_hsmic)) {

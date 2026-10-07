@@ -16,6 +16,7 @@
 		nokia,mcbsp = <&mcbsp3>;
 		ihf-gpios = <&twl_gpio 7 GPIO_ACTIVE_HIGH>;	/* the IHF speaker's amp */
 		jack-gpios = <&twl_gpio 0 GPIO_ACTIVE_HIGH>;	/* AvPlugDet: high when plugged */
+		tvout-gpios = <&gpio2 8 GPIO_ACTIVE_HIGH>;	/* gpio 40, TVOUT_EN: the jack in video mode */
 		io-channels = <&twl_madc 10>;			/* ADCIN10: the headset mic line */
 		io-channel-names = "hsmic";
 		interrupts-extended = <&twl 6>;			/* PIH line 6: the ACI block */
@@ -34,16 +35,6 @@
 		compatible = "nokia,dfl61-wl1273";
 		nokia,mcbsp = <&mcbsp4>;
 		nokia,audio-codec = <&wl1273>;	/* its codec child */
-	};
-};
-
-/* The AV jack in audio mode (TVOUT_EN low), as Nokia's twl5031-aci set it at probe */
-&gpio2 {
-	tvout-en-hog {
-		gpio-hog;
-		gpios = <8 GPIO_ACTIVE_HIGH>;	/* gpio 40 */
-		output-low;
-		line-name = "TVOUT_EN";
 	};
 };
 
