@@ -255,6 +255,28 @@
 };
 
 /*
+ * The modem link held still around an SSI clock change or flush as Nokia's omap_ssi did (its DVFS
+ * workaround, board-rm696-peripherals.c, mach-omap2/ssi.c): only the ready lines change. The
+ * modem's ready to us goes low through the pad's pull-down, ours to the modem is GPIO 154 driven low;
+ * data, flag and wake lines stay with the SSI.
+ */
+&ssi_pins_idle {
+	pinctrl-single,pins = <
+		OMAP3_CORE1_IOPAD(0x2180, PIN_INPUT_PULLDOWN | MUX_MODE7)	/* ssi1_rdy_tx */
+		OMAP3_CORE1_IOPAD(0x2188, PIN_OUTPUT | MUX_MODE4)		/* ssi1_rdy_rx: gpio 154 */
+	>;
+};
+
+&gpio5 {
+	ssi-ready-rx-hog {
+		gpio-hog;
+		gpios = <26 GPIO_ACTIVE_HIGH>;	/* gpio 154 */
+		output-low;
+		line-name = "ssi_ready_rx";
+	};
+};
+
+/*
  * GPIO 92 gates sys_clkreq and sys_off_mode onto the front white and back red lights (R&D sleep
  * indicators). Off at boot, as stock drove GPIO 92 low (board-gpio-export.c); writing 1 to
  * /sys/class/leds/debug::sleep/brightness shows them: dark while the device is in retention or off
