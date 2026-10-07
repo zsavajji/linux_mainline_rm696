@@ -801,11 +801,17 @@ static void ssi_error(struct hsi_port *port)
 
 	/* ACK error */
 	err = readl(omap_port->ssr_base + SSI_SSR_ERROR_REG);
-	dev_err(&port->device, "SSI error: 0x%02x\n", err);
 	if (!err) {
-		dev_dbg(&port->device, "spurious SSI error ignored!\n");
+		/* Acknowledged here too, or ssi_pio_thread() sees it again and never ends */
+		dev_err_ratelimited(&port->device,
+				    "spurious SSI error ignored (status 0x%08x, enable 0x%08x)\n",
+				    readl(omap_ssi->sys + SSI_MPU_STATUS_REG(port->num, 0)),
+				    readl(omap_ssi->sys + SSI_MPU_ENABLE_REG(port->num, 0)));
+		writel_relaxed(SSI_ERROROCCURED,
+			       omap_ssi->sys + SSI_MPU_STATUS_REG(port->num, 0));
 		return;
 	}
+	dev_err(&port->device, "SSI error: 0x%02x\n", err);
 	spin_lock(&omap_ssi->lock);
 	/* Cancel all GDD read transfers */
 	for (i = 0, val = 0; i < SSI_MAX_GDD_LCH; i++) {
