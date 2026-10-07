@@ -2436,6 +2436,13 @@ static void serial8250_shutdown(struct uart_port *port)
 		port->shutdown(port);
 	else
 		serial8250_do_shutdown(port);
+
+	/*
+	 * TX holds a runtime PM reference until the TX FIFO empty interrupt, and
+	 * shutdown has just disabled that interrupt: a port shut down with bytes
+	 * still in the FIFO (held back by CTS) would keep the device active for good.
+	 */
+	serial8250_rpm_put_tx(up_to_u8250p(port));
 }
 
 static void serial8250_flush_buffer(struct uart_port *port)
