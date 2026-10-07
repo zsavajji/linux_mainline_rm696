@@ -644,7 +644,12 @@ static int twlreg_probe(struct platform_device *pdev)
 	}
 	platform_set_drvdata(pdev, rdev);
 
-	twlreg_write(info, TWL_MODULE_PM_RECEIVER, VREG_REMAP, info->remap);
+	/*
+	 * Nokia's N9: twl4030-power loads Nokia's remaps (the LDOs stay active in sleep), which
+	 * Nokia's regulator driver never changed
+	 */
+	if (!of_machine_is_compatible("nokia,omap3-n9"))
+		twlreg_write(info, TWL_MODULE_PM_RECEIVER, VREG_REMAP, info->remap);
 
 	/* NOTE:  many regulators support short-circuit IRQs (presentable
 	 * as REGULATOR_OVER_CURRENT notifications?) configured via:
