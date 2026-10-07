@@ -140,8 +140,9 @@
 	pinctrl-0 = <&wakeup_pins>;
 
 	/*
-	 * Wakeups from CORE OFF, as Nokia's N9 kernel (every GPIO interrupt's pad, plat-omap/gpio.c,
-	 * and sys_nirq), for the pads no driver muxes: the settings NOLO leaves, plus the wake bit
+	 * Pads no driver muxes, as stock runs them: NOLO's settings (read at boot, before pinctrl-single
+	 * clears their wake bits) and the SDRAM's CKE pads as Nokia's kernel muxed them
+	 * (board-rm696.c; SPRZ319F 1.40: the ROM leaves them in safe mode with a pull-up)
 	 */
 	wakeup_pins: wakeup-pins {
 		pinctrl-single,pins = <
@@ -151,6 +152,10 @@
 			OMAP3_CORE1_IOPAD(0x210e, PIN_INPUT_PULLDOWN | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* gpio_95, GPS host request */
 			OMAP3_CORE1_IOPAD(0x211a, PIN_INPUT | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* gpio_101, BT host wakeup */
 			OMAP3_CORE1_IOPAD(0x21e0, PIN_INPUT_PULLUP | PIN_OFF_WAKEUPENABLE | MUX_MODE0)	/* sys_nirq, TWL */
+			OMAP3_CORE1_IOPAD(0x20e8, PIN_INPUT_PULLDOWN | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* gpio_76, NFC */
+			OMAP3_CORE1_IOPAD(0x219e, PIN_INPUT_PULLUP | PIN_OFF_WAKEUPENABLE | MUX_MODE0)	/* uart3_rx_irrx */
+			OMAP3_CORE1_IOPAD(0x2262, MUX_MODE0)	/* sdrc_cke0 */
+			OMAP3_CORE1_IOPAD(0x2264, MUX_MODE0)	/* sdrc_cke1 */
 		>;
 	};
 
@@ -167,7 +172,7 @@
 
 	display_pins: display-pins {
 		pinctrl-single,pins = <
-			OMAP3_CORE1_IOPAD(0x20ca, PIN_INPUT | MUX_MODE4) /* gpio 62 - display te */
+			OMAP3_CORE1_IOPAD(0x20ca, PIN_INPUT_PULLDOWN | PIN_OFF_WAKEUPENABLE | MUX_MODE4) /* gpio 62 - display te */
 			OMAP3_CORE1_IOPAD(0x20fe, PIN_OUTPUT | MUX_MODE4) /* gpio 87 - display reset */
 		>;
 	};

@@ -59,8 +59,8 @@
 &omap3_pmx_core {
 	accelerator_pins: accelerator-pins {
 		pinctrl-single,pins = <
-			OMAP3_CORE1_IOPAD(0x21da, PIN_INPUT | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* mcspi2_somi.gpio_180 -> LIS302 INT1 */
-			OMAP3_CORE1_IOPAD(0x21dc, PIN_INPUT | MUX_MODE4)	/* mcspi2_cs0.gpio_181 -> LIS302 INT2 */
+			OMAP3_CORE1_IOPAD(0x21da, PIN_INPUT | PULL_UP | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* mcspi2_somi.gpio_180 -> LIS302 INT1 */
+			OMAP3_CORE1_IOPAD(0x21dc, PIN_INPUT | PULL_UP | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* mcspi2_cs0.gpio_181 -> LIS302 INT2 */
 		>;
 	};
 
@@ -72,7 +72,7 @@
 
 	mmc2_pins: mmc2-pins {
 		pinctrl-single,pins = <
-			OMAP3_CORE1_IOPAD(0x2158, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc2_clk */
+			OMAP3_CORE1_IOPAD(0x2158, PIN_INPUT | MUX_MODE0) /* sdmmc2_clk */
 			OMAP3_CORE1_IOPAD(0x215a, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc2_cmd */
 			OMAP3_CORE1_IOPAD(0x215c, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc2_dat0 */
 			OMAP3_CORE1_IOPAD(0x215e, PIN_INPUT_PULLUP | MUX_MODE0) /* sdmmc2_dat1 */
@@ -84,7 +84,7 @@
 	wlan_pins: wlan-pins {
 		pinctrl-single,pins = <
 			OMAP3_CORE1_IOPAD(0x207c, PIN_OUTPUT | MUX_MODE4) /* gpio 35 - wlan enable */
-			OMAP3_CORE1_IOPAD(0x208a, PIN_INPUT | PIN_OFF_WAKEUPENABLE | MUX_MODE4) /* gpio 42 - wlan irq */
+			OMAP3_CORE1_IOPAD(0x208a, PIN_INPUT_PULLDOWN | PIN_OFF_WAKEUPENABLE | MUX_MODE4) /* gpio 42 - wlan irq */
 		>;
 	};
 
@@ -92,7 +92,7 @@
 		pinctrl-single,pins = <
 			OMAP3_CORE1_IOPAD(0x217c, PIN_OUTPUT | MUX_MODE1)            /* ssi1_dat_tx */
 			OMAP3_CORE1_IOPAD(0x217e, PIN_OUTPUT | MUX_MODE1)            /* ssi1_flag_tx */
-			OMAP3_CORE1_IOPAD(0x2180, PIN_INPUT_PULLUP | MUX_MODE1)      /* ssi1_rdy_tx */
+			OMAP3_CORE1_IOPAD(0x2180, PIN_INPUT | MUX_MODE1)      /* ssi1_rdy_tx */
 			OMAP3_CORE1_IOPAD(0x2182, PIN_INPUT | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* ssi1_wake_tx (cawake) */
 			OMAP3_CORE1_IOPAD(0x2184, PIN_INPUT | MUX_MODE1)             /* ssi1_dat_rx */
 			OMAP3_CORE1_IOPAD(0x2186, PIN_INPUT | MUX_MODE1)             /* ssi1_flag_rx */
@@ -117,7 +117,7 @@
 	modem_pins1: modem-core1-pins {
 		pinctrl-single,pins = <
 			OMAP3_CORE1_IOPAD(0x207a, PIN_INPUT | PIN_OFF_WAKEUPENABLE | MUX_MODE4)	/* gpio_34 (ape_rst_rq) */
-			OMAP3_CORE1_IOPAD(0x2100, PIN_OUTPUT | MUX_MODE4)            /* gpio_88 (cmt_rst_rq) */
+			OMAP3_CORE1_IOPAD(0x2100, PIN_OUTPUT | PULL_UP | MUX_MODE4)  /* gpio_88 (cmt_rst_rq) */
 			OMAP3_CORE1_IOPAD(0x210a, PIN_OUTPUT | MUX_MODE4)            /* gpio_93 (cmt_apeslpx) */
 		>;
 	};
