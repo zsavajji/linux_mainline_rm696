@@ -2380,6 +2380,9 @@ config SND_SOC_WCD939X_SDW
 	  The WCD9390/9395 is a audio codec IC Integrated in
 	  Qualcomm SoCs like SM8650.
 
+config SND_SOC_WL1273
+	tristate
+
 config SND_SOC_WM0010
 	tristate
 	depends on SPI_MASTER
