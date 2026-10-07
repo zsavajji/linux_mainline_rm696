@@ -44,8 +44,12 @@
 /* timeout waiting for the controller to respond */
 #define OMAP_I2C_TIMEOUT (msecs_to_jiffies(1000))
 
-/* timeout for pm runtime autosuspend */
-#define OMAP_I2C_PM_TIMEOUT		1000	/* ms */
+/*
+ * Runtime PM autosuspend delay: none, as Nokia's N9 kernel idled the controller after each
+ * transfer. While its functional clock runs, the OMAP3 CORE power domain can't retain, and an idle
+ * period that starts inside the delay is spent awake to its end (tunable per adapter in sysfs)
+ */
+#define OMAP_I2C_PM_TIMEOUT		0	/* ms */
 
 /* timeout for making decision on bus free status */
 #define OMAP_I2C_BUS_FREE_TIMEOUT (msecs_to_jiffies(10))
