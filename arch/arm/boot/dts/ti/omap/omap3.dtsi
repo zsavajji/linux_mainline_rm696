@@ -553,10 +553,36 @@
 			status = "disabled";
 		};
 
-		wdt2: wdt@48314000 {
-			compatible = "ti,omap3-wdt";
-			reg = <0x48314000 0x80>;
-			ti,hwmods = "wd_timer2";
+		/*
+		 * Force idle only: with smart idle or no-idle the running watchdog keeps the CORE
+		 * clock domain from idling (no-idle was the legacy hwmod's choice). Nokia's N9 kernel
+		 * also kept it in force idle (omap_wdt.c: SYSCONFIG 0x01 at probe). Not reset here:
+		 * omap_wdt reprograms it at probe
+		 */
+		target-module@48314000 {
+			compatible = "ti,sysc-omap2", "ti,sysc";
+			reg = <0x48314000 0x4>,
+			      <0x48314010 0x4>,
+			      <0x48314014 0x4>;
+			reg-names = "rev", "sysc", "syss";
+			ti,sysc-mask = <(SYSC_OMAP2_CLOCKACTIVITY |
+					 SYSC_OMAP2_EMUFREE |
+					 SYSC_OMAP2_ENAWAKEUP |
+					 SYSC_OMAP2_SOFTRESET |
+					 SYSC_OMAP2_AUTOIDLE)>;
+			ti,sysc-sidle = <SYSC_IDLE_FORCE>;
+			ti,syss-mask = <1>;
+			ti,no-reset-on-init;
+			clocks = <&wdt2_fck>, <&wdt2_ick>;
+			clock-names = "fck", "ick";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x0 0x48314000 0x1000>;
+
+			wdt2: wdt@0 {
+				compatible = "ti,omap3-wdt";
+				reg = <0 0x80>;
+			};
 		};
 
 		mcbsp1: mcbsp@48074000 {

@@ -26,7 +26,6 @@
 #include "cm-regbits-34xx.h"
 
 #include "i2c.h"
-#include "wd_timer.h"
 
 /*
  * OMAP3xxx hardware module integration data
@@ -266,24 +265,6 @@ static struct omap_hwmod omap3xxx_timer11_hwmod = {
 	.flags		= HWMOD_SET_DEFAULT_CLOCKACT,
 };
 
-/*
- * 'wd_timer' class
- * 32-bit watchdog upward counter that generates a pulse on the reset pin on
- * overflow condition
- */
-
-static struct omap_hwmod_class_sysconfig omap3xxx_wd_timer_sysc = {
-	.rev_offs	= 0x0000,
-	.sysc_offs	= 0x0010,
-	.syss_offs	= 0x0014,
-	.sysc_flags	= (SYSC_HAS_SIDLEMODE | SYSC_HAS_EMUFREE |
-			   SYSC_HAS_ENAWAKEUP | SYSC_HAS_SOFTRESET |
-			   SYSC_HAS_AUTOIDLE | SYSC_HAS_CLOCKACTIVITY |
-			   SYSS_HAS_RESET_STATUS),
-	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART),
-	.sysc_fields    = &omap_hwmod_sysc_type1,
-};
-
 /* I2C common */
 static struct omap_hwmod_class_sysconfig i2c_sysc = {
 	.rev_offs	= 0x00,
@@ -294,31 +275,6 @@ static struct omap_hwmod_class_sysconfig i2c_sysc = {
 			   SYSC_HAS_AUTOIDLE | SYSS_HAS_RESET_STATUS),
 	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART),
 	.sysc_fields    = &omap_hwmod_sysc_type1,
-};
-
-static struct omap_hwmod_class omap3xxx_wd_timer_hwmod_class = {
-	.name		= "wd_timer",
-	.sysc		= &omap3xxx_wd_timer_sysc,
-	.pre_shutdown	= &omap2_wd_timer_disable,
-	.reset		= &omap2_wd_timer_reset,
-};
-
-static struct omap_hwmod omap3xxx_wd_timer2_hwmod = {
-	.name		= "wd_timer2",
-	.class		= &omap3xxx_wd_timer_hwmod_class,
-	.main_clk	= "wdt2_fck",
-	.prcm		= {
-		.omap2 = {
-			.module_offs = WKUP_MOD,
-			.idlest_reg_id = 1,
-			.idlest_idle_bit = OMAP3430_ST_WDT2_SHIFT,
-		},
-	},
-	/*
-	 * XXX: Use software supervised mode, HW supervised smartidle seems to
-	 * block CORE power domain idle transitions. Maybe a HW bug in wdt2?
-	 */
-	.flags		= HWMOD_SWSUP_SIDLE,
 };
 
 /* UART1 */
@@ -1761,15 +1717,6 @@ static struct omap_hwmod_ocp_if omap3xxx_l4_core__timer11 = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
-/* l4_wkup -> wd_timer2 */
-
-static struct omap_hwmod_ocp_if omap3xxx_l4_wkup__wd_timer2 = {
-	.master		= &omap3xxx_l4_wkup_hwmod,
-	.slave		= &omap3xxx_wd_timer2_hwmod,
-	.clk		= "wdt2_ick",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
 /* l4_core -> dss */
 static struct omap_hwmod_ocp_if omap3430es1_l4_core__dss = {
 	.master		= &omap3xxx_l4_core_hwmod,
@@ -2298,7 +2245,6 @@ static struct omap_hwmod_ocp_if *omap3xxx_hwmod_ocp_ifs[] __initdata = {
 	&omap3xxx_l4_per__timer8,
 	&omap3xxx_l4_per__timer9,
 	&omap3xxx_l4_core__timer11,
-	&omap3xxx_l4_wkup__wd_timer2,
 	&omap3xxx_l4_wkup__gpio1,
 	&omap3xxx_l4_per__gpio2,
 	&omap3xxx_l4_per__gpio3,
