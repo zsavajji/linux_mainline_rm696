@@ -361,6 +361,7 @@
  * watchdogs reset the phone into NOLO and stock Harmattan.
  */
 &twl_power {
+	compatible = "nokia,twl5031-power-n9", "ti,twl4030-power";	/* Nokia's sleep scripts */
 	/delete-property/ ti,use_poweroff;
 };
 

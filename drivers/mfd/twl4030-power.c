@@ -849,9 +849,68 @@ static struct twl4030_power_data omap3_idle_ac_quirk_osc_off = {
 	.ac_charger_quirk	= true,
 };
 
+/*
+ * Nokia's N9 (TWL5031): the scripts and resource configuration of Nokia's kernel
+ * (arch/arm/mach-omap2/nokia-twl4030.c), checked against its PR1.3 binary. The sleep and wakeup
+ * scripts are omap3_idle's; the warm reset differs. Loaded in this driver's order (sleep last).
+ */
+static struct twl4030_ins n9_wrst_seq[] = {
+	TWL_RESOURCE_OFF(RES_RESET),
+	{ MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_ALL, 0, 2, RES_STATE_WRST), 1 },
+	TWL_RESOURCE_RESET(RES_VPLL1),
+	{ MSG_SINGULAR(DEV_GRP_NULL, RES_VDD2, RES_STATE_WRST), 7 },
+	{ MSG_SINGULAR(DEV_GRP_NULL, RES_VDD1, RES_STATE_WRST), 7 },
+	{ MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_ALL, 0, 1, RES_STATE_WRST), 1 },
+	TWL_RESOURCE_ON(RES_RESET),
+};
+
+static struct twl4030_script n9_wrst_script = {
+	.script	= n9_wrst_seq,
+	.size	= ARRAY_SIZE(n9_wrst_seq),
+	.flags	= TWL4030_WRST_SCRIPT,
+};
+
+static struct twl4030_script *n9_scripts[] = {
+	&omap3_idle_wakeup_p12_script,
+	&omap3_idle_wakeup_p3_script,
+	&n9_wrst_script,
+	&omap3_idle_sleep_on_script,
+};
+
+/* VDD1, VDD2 and VPLL1 off in sleep, the LDOs active, as Nokia's */
+#define N9_LDO(res)	{ .resource = (res), .devgroup = TWL4030_RESCONFIG_UNDEF, \
+			  .remap_sleep = TWL_REMAP_ACTIVE, }
+static struct twl4030_resconfig n9_rconfig[] = {
+	{ .resource = RES_VDD1, .devgroup = DEV_GRP_P1, .type = 4, },
+	{ .resource = RES_VDD2, .devgroup = DEV_GRP_P1, .type = 3, },
+	{ .resource = RES_VPLL1, .devgroup = DEV_GRP_P1, .type = 3, },
+	N9_LDO(RES_VPLL2), N9_LDO(RES_VAUX1), N9_LDO(RES_VAUX2), N9_LDO(RES_VAUX3),
+	N9_LDO(RES_VAUX4), N9_LDO(RES_VMMC1), N9_LDO(RES_VMMC2), N9_LDO(RES_VDAC),
+	N9_LDO(RES_VUSB_1V5), N9_LDO(RES_VUSB_1V8), N9_LDO(RES_VUSB_3V1),
+	{ RES_VINTANA1, DEV_GRP_P1 | DEV_GRP_P2, 1, 2, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_VINTANA2, DEV_GRP_P1 | DEV_GRP_P2, 0, 2, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_VINTDIG, DEV_GRP_P1 | DEV_GRP_P2, 1, 2, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_VIO, DEV_GRP_P1 | DEV_GRP_P2, 2, 2, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_CLKEN, DEV_GRP_P1 | DEV_GRP_P3, 3, 2, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_HFCLKOUT, DEV_GRP_P3, 0, 1, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_NRES_PWRON, DEV_GRP_P1 | DEV_GRP_P3, 0, 1, TWL_REMAP_OFF, TWL_REMAP_SLEEP },
+	{ RES_REGEN, TWL_DEV_GRP_P123, 2, 0, TWL_REMAP_OFF, TWL_REMAP_ACTIVE },
+	{ /* Terminator */ },
+};
+
+static struct twl4030_power_data n9_power = {
+	.scripts		= n9_scripts,
+	.num			= ARRAY_SIZE(n9_scripts),
+	.resource_config	= n9_rconfig,
+};
+
 static const struct of_device_id twl4030_power_of_match[] = {
 	{
 		.compatible = "ti,twl4030-power",
+	},
+	{
+		.compatible = "nokia,twl5031-power-n9",
+		.data = &n9_power,
 	},
 	{
 		.compatible = "ti,twl4030-power-reset",
