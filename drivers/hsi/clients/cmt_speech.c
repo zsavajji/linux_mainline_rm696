@@ -216,12 +216,14 @@ static void cs_release_cmd(struct hsi_msg *msg)
 static void cs_cmd_destructor(struct hsi_msg *msg)
 {
 	struct cs_hsi_iface *hi = msg->context;
+	bool active;
 
 	spin_lock(&hi->lock);
 
 	dev_dbg(&cs_char_data.cl->device, "control cmd destructor\n");
 
-	if (hi->iface_state != CS_STATE_CLOSED)
+	active = hi->iface_state != CS_STATE_CLOSED;
+	if (active)
 		dev_err(&hi->cl->device, "Cmd flushed while driver active\n");
 
 	if (msg->ttype == HSI_MSG_READ)
@@ -234,6 +236,14 @@ static void cs_cmd_destructor(struct hsi_msg *msg)
 	cs_release_cmd(msg);
 
 	spin_unlock(&hi->lock);
+
+	/*
+	 * Flushed while open: the SSI protocol reset the port (a modem reset,
+	 * its watchdog). Tell the client, as Nokia's driver did:
+	 * libcmtspeechdata resets its call state on CS_ERROR.
+	 */
+	if (active)
+		cs_notify_control(CS_ERROR | CS_ERR_PEER_RESET);
 }
 
 static struct hsi_msg *cs_claim_cmd(struct cs_hsi_iface* ssi)
