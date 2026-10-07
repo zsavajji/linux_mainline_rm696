@@ -472,6 +472,24 @@ static u8 hci_cc_write_scan_enable(struct hci_dev *hdev, void *data,
 	else
 		clear_bit(HCI_PSCAN, &hdev->flags);
 
+	/*
+	 * Without mgmt (BlueZ 4 writes the scan mode with raw HCI commands) the mode written is
+	 * the connectable and discoverable state: hci_update_scan_sync() rewrites the scan mode
+	 * from these flags after every connection and disconnection, and with them unset turned
+	 * page and inquiry scan off at the first connection, for good.
+	 */
+	if (!hci_dev_test_flag(hdev, HCI_MGMT)) {
+		if (param & SCAN_PAGE)
+			hci_dev_set_flag(hdev, HCI_CONNECTABLE);
+		else
+			hci_dev_clear_flag(hdev, HCI_CONNECTABLE);
+
+		if (param & SCAN_INQUIRY)
+			hci_dev_set_flag(hdev, HCI_DISCOVERABLE);
+		else
+			hci_dev_clear_flag(hdev, HCI_DISCOVERABLE);
+	}
+
 done:
 	hci_dev_unlock(hdev);
 
