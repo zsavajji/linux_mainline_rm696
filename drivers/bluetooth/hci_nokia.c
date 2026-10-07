@@ -767,13 +767,19 @@ static const struct hci_uart_proto nokia_proto = {
 	.manufacturer	= 1,
 };
 
-/* Bluetooth off: the chip held in reset, as stock's hci_h4p (the set-up resets it at power-on) */
+/*
+ * Bluetooth off: the chip held in reset, as stock's hci_h4p (the set-up resets it at power-on).
+ * Flow control goes off first: a chip in reset leaves CTS high (pulled up), and bytes still in
+ * the UART's FIFO, or written after this, would wait for it until the port's close gives up
+ * (30 s, bluetoothd blocked). Stock reset the UART at close and lost them the same way.
+ */
 static int nokia_shutdown(struct hci_dev *hdev)
 {
 	struct hci_uart *hu = hci_get_drvdata(hdev);
 	struct nokia_bt_dev *btdev = hu->priv;
 
 	btdev->initialized = false;
+	nokia_flow_control(btdev->serdev, false);
 	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
 	gpiod_set_value_cansleep(btdev->reset, 1);
 	return 0;
