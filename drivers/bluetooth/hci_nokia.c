@@ -149,6 +149,8 @@ struct nokia_bt_dev {
 	bool initialized;
 	bool tx_enabled;
 	bool rx_enabled;
+	bool uart_released;
+	int (*hci_close)(struct hci_dev *hdev);
 
 	unsigned long rx_last;
 };
@@ -491,10 +493,10 @@ static int nokia_setup(struct hci_uart *hu)
 
 	dev_dbg(dev, "protocol setup done!");
 
-	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
-	pm_runtime_put(dev);
 	btdev->tx_enabled = false;
 	btdev->initialized = true;
+	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
+	pm_runtime_put(dev);
 
 	return 0;
 out:
@@ -768,6 +770,29 @@ static const struct hci_uart_proto nokia_proto = {
 };
 
 /*
+ * While the chip sleeps the UART is released too (runtime suspend, below): take the port's runtime
+ * PM reference back, for good, before the port is shut down or closed (its close drops it).
+ */
+static void nokia_hold_uart(struct nokia_bt_dev *btdev)
+{
+	struct device *dev = &btdev->serdev->dev;
+
+	pm_runtime_get_sync(dev);
+	btdev->initialized = false;
+	pm_runtime_put(dev);
+}
+
+/* Every close (power-off, a failed power-on, unbind: no shutdown then) */
+static int nokia_hci_close(struct hci_dev *hdev)
+{
+	struct hci_uart *hu = hci_get_drvdata(hdev);
+	struct nokia_bt_dev *btdev = hu->priv;
+
+	nokia_hold_uart(btdev);
+	return btdev->hci_close(hdev);
+}
+
+/*
  * Bluetooth off: the chip held in reset, as stock's hci_h4p (the set-up resets it at power-on).
  * Flow control goes off first: a chip in reset leaves CTS high (pulled up), and bytes still in
  * the UART's FIFO, or written after this, would wait for it until the port's close gives up
@@ -778,7 +803,7 @@ static int nokia_shutdown(struct hci_dev *hdev)
 	struct hci_uart *hu = hci_get_drvdata(hdev);
 	struct nokia_bt_dev *btdev = hu->priv;
 
-	btdev->initialized = false;
+	nokia_hold_uart(btdev);
 	nokia_flow_control(btdev->serdev, false);
 	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
 	gpiod_set_value_cansleep(btdev->reset, 1);
@@ -864,6 +889,8 @@ static int nokia_bluetooth_serdev_probe(struct serdev_device *serdev)
 	 */
 	hci_set_quirk(btdev->hu.hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
 	btdev->hu.hdev->shutdown = nokia_shutdown;
+	btdev->hci_close = btdev->hu.hdev->close;
+	btdev->hu.hdev->close = nokia_hci_close;
 
 	return 0;
 }
@@ -876,10 +903,13 @@ static void nokia_bluetooth_serdev_remove(struct serdev_device *serdev)
 }
 
 /*
- * RTS down while the chip sleeps, up when it wakes (host wakeup) or the host sends: RTS alone,
- * as stock's hci_h4p. A termios change (flow control) would clear the UART's receive FIFO
- * (8250_omap's MDR1 erratum path), the chip's first bytes with it. Only between a set-up and
- * the shutdown (the port is open then; it's closed while Bluetooth is off).
+ * While the chip sleeps (no host wakeup, nothing to send): RTS down and the UART released (the
+ * port's runtime PM reference serdev_device_open() took), so UART2 and the CORE domain can idle,
+ * as stock's hci_h4p let them. The chip waits for RTS before it sends, so a wakeup resumes the UART
+ * first (restoring it clears its FIFOs) and then raises RTS. RTS alone: a termios change (flow
+ * control) would clear the receive FIFO again (8250_omap's MDR1 erratum path), the chip's first
+ * bytes with it. Only between a set-up and the shutdown (the port is open then; it's closed while
+ * Bluetooth is off).
  * ponytail: rts_delay_us is a test knob, a late RTS as from a UART woken from CORE idle
  */
 static unsigned int rts_delay_us;
@@ -889,8 +919,11 @@ static int nokia_bluetooth_runtime_suspend(struct device *dev)
 {
 	struct nokia_bt_dev *btdev = serdev_device_get_drvdata(to_serdev_device(dev));
 
-	if (btdev->initialized)
+	if (btdev->initialized && !btdev->uart_released) {
 		serdev_device_set_rts(btdev->serdev, false);
+		pm_runtime_put(&btdev->serdev->ctrl->dev);
+		btdev->uart_released = true;
+	}
 	return 0;
 }
 
@@ -898,6 +931,10 @@ static int nokia_bluetooth_runtime_resume(struct device *dev)
 {
 	struct nokia_bt_dev *btdev = serdev_device_get_drvdata(to_serdev_device(dev));
 
+	if (btdev->uart_released) {
+		pm_runtime_get_sync(&btdev->serdev->ctrl->dev);
+		btdev->uart_released = false;
+	}
 	if (btdev->initialized) {
 		if (rts_delay_us)
 			usleep_range(rts_delay_us, rts_delay_us + 100);
