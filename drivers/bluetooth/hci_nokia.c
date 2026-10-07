@@ -38,12 +38,17 @@
 #define FIRMWARE_TI1271_PRELE	"nokia/ti1273_prele.bin"
 
 /*
- * The TI1271 at 921600 after its firmware (which leaves it at 3.69 Mbaud), with TI's own command for
- * it (as hci_ll for WiLink): at 3.69 Mbaud the OMAP3 UART loses received bytes (frame reassembly
- * failures, lost inquiry events), with or without DMA.
+ * The TI1271 at 921600 after its firmware, with TI's own command for it (as hci_ll for WiLink).
+ * The firmware leaves it at 3.69 Mbaud, the rate Nokia's hci_h4p ran it at (ti_baud=3692300 keeps
+ * it for the next power-on): ~225 KB/s each way in loopback against ~67 at 921600, but a file
+ * transfer with a phone stalled on a corrupt ACL frame, with a break on the line (Nokia N9,
+ * 2026-10-07); loopback never let the chip sleep. 921600 until that is understood.
  */
 #define TI1271_BAUD_RATE		921600
 #define HCI_VS_UPDATE_UART_HCI_BAUDRATE	0xff36
+
+static unsigned int ti_baud = TI1271_BAUD_RATE;
+module_param(ti_baud, uint, 0644);
 
 #define HCI_NOKIA_NEG_PKT	0x06
 #define HCI_NOKIA_ALIVE_PKT	0x07
@@ -469,8 +474,8 @@ static int nokia_setup(struct hci_uart *hu)
 	serdev_device_set_baudrate(btdev->serdev, MAX_BAUD_RATE);
 	nokia_flow_control(btdev->serdev, true);
 
-	if (btdev->man_id == NOKIA_ID_TI1271) {
-		__le32 speed = cpu_to_le32(TI1271_BAUD_RATE);
+	if (btdev->man_id == NOKIA_ID_TI1271 && ti_baud != MAX_BAUD_RATE) {
+		__le32 speed = cpu_to_le32(ti_baud);
 		struct sk_buff *skb;
 
 		/* answered at the old rate, then the chip switches */
@@ -481,9 +486,12 @@ static int nokia_setup(struct hci_uart *hu)
 		} else {
 			kfree_skb(skb);
 			nokia_flow_control(btdev->serdev, false);
-			serdev_device_set_baudrate(btdev->serdev, TI1271_BAUD_RATE);
+			serdev_device_set_baudrate(btdev->serdev, ti_baud);
 			nokia_flow_control(btdev->serdev, true);
 		}
+	}
+
+	if (btdev->man_id == NOKIA_ID_TI1271) {
 
 		/* The TI1273 LE firmware answers LE Read Supported States with 4 bytes of the 8 */
 		hci_set_quirk(hu->hdev, HCI_QUIRK_BROKEN_LE_STATES);
