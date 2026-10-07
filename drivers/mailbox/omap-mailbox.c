@@ -9,6 +9,7 @@
  *          Suman Anna <s-anna@ti.com>
  */
 
+#include <linux/cpu_pm.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
@@ -26,6 +27,7 @@
 #include "mailbox.h"
 
 #define MAILBOX_REVISION		0x000
+#define MAILBOX_SYSCONFIG		0x010
 #define MAILBOX_MESSAGE(m)		(0x040 + 4 * (m))
 #define MAILBOX_FIFOSTATUS(m)		(0x080 + 4 * (m))
 #define MAILBOX_MSGSTATUS(m)		(0x0c0 + 4 * (m))
@@ -80,6 +82,9 @@ struct omap_mbox_device {
 	u32 num_fifos;
 	u32 intr_type;
 	const struct omap_mbox_match_data *mbox_data;
+	struct notifier_block nb;
+	u32 sysconfig;
+	bool ctx_saved;
 };
 
 struct omap_mbox {
@@ -404,6 +409,45 @@ static int omap_mbox_resume(struct device *dev)
 }
 #endif
 
+/*
+ * CORE OFF resets the mailbox, also while a channel keeps it active (the DSP bridge holds its
+ * channel through the DSP's hibernation): keep its idle mode and interrupt enables across it,
+ * as Nokia's N9 kernel restored the mailbox before waking the DSP (tiomap3430_pwr.c)
+ */
+static int omap_mbox_cpu_pm_notifier(struct notifier_block *nb, unsigned long cmd, void *v)
+{
+	struct omap_mbox_device *mdev = container_of(nb, struct omap_mbox_device, nb);
+	u32 usr;
+
+	switch (cmd) {
+	case CPU_CLUSTER_PM_ENTER:
+		mdev->ctx_saved = pm_runtime_active(mdev->dev);
+		if (!mdev->ctx_saved)
+			break;
+		mdev->sysconfig = mbox_read_reg(mdev, MAILBOX_SYSCONFIG);
+		for (usr = 0; usr < mdev->num_users; usr++)
+			mdev->irq_ctx[usr] = mbox_read_reg(mdev,
+						MAILBOX_IRQENABLE(mdev->intr_type, usr));
+		break;
+	case CPU_CLUSTER_PM_ENTER_FAILED:
+	case CPU_CLUSTER_PM_EXIT:
+		if (!mdev->ctx_saved)
+			break;
+		mbox_write_reg(mdev, mdev->sysconfig, MAILBOX_SYSCONFIG);
+		for (usr = 0; usr < mdev->num_users; usr++)
+			mbox_write_reg(mdev, mdev->irq_ctx[usr],
+				       MAILBOX_IRQENABLE(mdev->intr_type, usr));
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static void omap_mbox_cpu_pm_unregister(void *nb)
+{
+	cpu_pm_unregister_notifier(nb);
+}
+
 static const struct dev_pm_ops omap_mbox_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(omap_mbox_suspend, omap_mbox_resume)
 };
@@ -627,7 +671,12 @@ static int omap_mbox_probe(struct platform_device *pdev)
 	if (ret < 0 && ret != -ENOSYS)
 		return ret;
 
-	return 0;
+	mdev->nb.notifier_call = omap_mbox_cpu_pm_notifier;
+	ret = cpu_pm_register_notifier(&mdev->nb);
+	if (ret)
+		return ret;
+
+	return devm_add_action_or_reset(mdev->dev, omap_mbox_cpu_pm_unregister, &mdev->nb);
 }
 
 static struct platform_driver omap_mbox_driver = {
