@@ -23,6 +23,7 @@ obj-$(CONFIG_SENSORS_BH1770)	+= bh1770glc.o
 obj-$(CONFIG_SENSORS_APDS990X)	+= apds990x.o
 obj-$(CONFIG_NOKIA_AK8975)	+= nokia-ak8975.o
 obj-$(CONFIG_BCM4751_GPS)	+= bcm4751-gps.o
+obj-$(CONFIG_NOKIA_PN544)	+= nokia-pn544.o
 obj-$(CONFIG_ENCLOSURE_SERVICES) += enclosure.o
 obj-$(CONFIG_KGDB_TESTS)	+= kgdbts.o
 obj-$(CONFIG_SGI_XP)		+= sgi-xp/

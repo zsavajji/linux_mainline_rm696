@@ -10,7 +10,9 @@
  * - the AK8975 magnetometer on I2C3 with Nokia's interface (nokia,n9-ak8975: /dev/ak89750 for
  *   sensord, the board's axis mapping in the driver); drivers/misc/nokia-ak8975.c;
  * - the BCM4751 GPS on I2C3 (nokia,bcm4751-gps: /dev/bcm4751-gps and sysfs at 3-01fa for nped),
- *   NSHUTDOWN on GPIO 94, wakeup on GPIO 91, host request on GPIO 95; drivers/misc/bcm4751-gps.c.
+ *   NSHUTDOWN on GPIO 94, wakeup on GPIO 91, host request on GPIO 95; drivers/misc/bcm4751-gps.c;
+ * - the PN544 NFC controller on I2C3 with Nokia's /dev/pn544 for Harmattan's nfcd (nokia,n9-pn544);
+ *   drivers/misc/nokia-pn544.c.
  */
 
 #include <dt-bindings/gpio/gpio.h>
@@ -92,6 +94,20 @@
 		host-req-gpios = <&gpio3 31 GPIO_ACTIVE_HIGH>;	/* gpio 95 */
 		Vbat-supply = <&vio>;
 		Vddio-supply = <&vio>;
+	};
+
+	/*
+	 * Stock's pn544 (board-rm696-peripherals.c): host interrupt on GPIO 76, ENABLE on GPIO 77,
+	 * FW_RESET on GPIO 78 (high: firmware download mode); Vdd_IO from VIO, VBat from the battery.
+	 * The pads are GPIOs from NOLO (76 an input with pull-down)
+	 */
+	nfc@2b {
+		compatible = "nokia,n9-pn544";
+		reg = <0x2b>;
+		interrupts-extended = <&gpio3 12 IRQ_TYPE_EDGE_RISING>;	/* gpio 76 */
+		enable-gpios = <&gpio3 13 GPIO_ACTIVE_HIGH>;		/* gpio 77 */
+		firmware-gpios = <&gpio3 14 GPIO_ACTIVE_HIGH>;		/* gpio 78 */
+		Vdd_IO-supply = <&vio>;
 	};
 };
 

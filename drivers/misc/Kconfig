@@ -407,6 +407,16 @@ config BCM4751_GPS
 	  exposed it: /dev/bcm4751-gps for raw I2C transfers by the closed
 	  location stack, sysfs enable, wakeup and hostreq.
 
+config NOKIA_PN544
+	tristate "PN544 NFC controller (Nokia's /dev/pn544 interface)"
+	depends on I2C
+	select CRC_CCITT
+	help
+	  The PN544 NFC controller of the Nokia N9 as Nokia's Harmattan kernel
+	  exposed it: /dev/pn544 passes LLC frames and firmware download
+	  frames to Harmattan's closed NFC stack (libNFCDAL). Mainline's NFC
+	  subsystem driver is CONFIG_NFC_PN544_I2C.
+
 config HMC6352
 	tristate "Honeywell HMC6352 compass"
 	depends on I2C
