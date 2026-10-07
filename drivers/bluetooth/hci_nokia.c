@@ -805,6 +805,11 @@ static int nokia_shutdown(struct hci_dev *hdev)
 
 	nokia_hold_uart(btdev);
 	nokia_flow_control(btdev->serdev, false);
+	/*
+	 * A transmission under way ends here, its runtime PM reference put: one left waiting for the
+	 * FIFO would put it again after the next set-up has (tx_enabled), an underflow
+	 */
+	flush_work(&hu->write_work);
 	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
 	gpiod_set_value_cansleep(btdev->reset, 1);
 	return 0;
