@@ -184,6 +184,30 @@ static irqreturn_t _prcm_int_handle_wakeup(int irq, void *unused)
 	return c ? IRQ_HANDLED : IRQ_NONE;
 }
 
+/*
+ * IO pad wakeups only around CORE retention and OFF, with the daisy chain armed (WUCLKIN up)
+ * for the whole sleep, as Nokia's N9 kernel (pm34xx.c, omap3_enable_io_chain()): awake, a pad's
+ * wake event would only interrupt the MPU. Dropping the chain after wakeup clears its latches.
+ */
+static void omap3_io_wakeup_enable(void)
+{
+	int i = 0;
+
+	omap2_prm_set_mod_reg_bits(OMAP3430_EN_IO_MASK | OMAP3430_EN_IO_CHAIN_MASK, WKUP_MOD,
+				   PM_WKEN);
+	omap_test_timeout(omap2_prm_read_mod_reg(WKUP_MOD, PM_WKST) & OMAP3430_ST_IO_CHAIN_MASK,
+			  100, i);
+	if (i == 100)
+		pr_warn_ratelimited("PM: I/O wakeup chain didn't latch\n");
+}
+
+static void omap3_io_wakeup_disable(void)
+{
+	omap2_prm_clear_mod_reg_bits(OMAP3430_EN_IO_MASK | OMAP3430_EN_IO_CHAIN_MASK, WKUP_MOD,
+				     PM_WKEN);
+	omap2_prm_write_mod_reg(OMAP3430_ST_IO_CHAIN_MASK, WKUP_MOD, PM_WKST);
+}
+
 static void omap34xx_save_context(u32 *save)
 {
 	u32 val;
@@ -311,6 +335,9 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		core_off_refused = true;
 	}
 
+	if (core_next_state < PWRDM_POWER_ON)
+		omap3_io_wakeup_enable();
+
 	/*
 	 * On EMU/HS devices ROM code restores a SRDC value
 	 * from scratchpad which has automatic self refresh on timeout
@@ -365,8 +392,10 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		omap3_intc_resume_idle();
 	}
 
-	if (core_next_state < PWRDM_POWER_ON)
+	if (core_next_state < PWRDM_POWER_ON) {
+		omap3_io_wakeup_disable();
 		omap3_l3_idle_exit();
+	}
 
 	pwrdm_post_transition(NULL);
 
@@ -461,6 +490,8 @@ static void __init prcm_setup_regs(void)
 	omap3_ctrl_init();
 
 	omap3_prm_init_pm(cpu_is_omap3630(), omap3_has_iva());
+	/* IO wakeups on only around CORE idle (omap3_io_wakeup_enable()) */
+	omap2_prm_clear_mod_reg_bits(OMAP3430_EN_IO_MASK, WKUP_MOD, PM_WKEN);
 
 	if (cpu_is_omap3630())
 		omap3_erratum_1_107();
