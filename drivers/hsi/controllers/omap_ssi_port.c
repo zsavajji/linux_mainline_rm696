@@ -804,9 +804,13 @@ static void ssi_error(struct hsi_port *port)
 	if (!err) {
 		/* Acknowledged here too, or ssi_pio_thread() sees it again and never ends */
 		dev_err_ratelimited(&port->device,
-				    "spurious SSI error ignored (status 0x%08x, enable 0x%08x)\n",
+				    "spurious SSI error ignored (status 0x%08x, enable 0x%08x, ssr/sst mode %u/%u, cawake %u, port %s)\n",
 				    readl(omap_ssi->sys + SSI_MPU_STATUS_REG(port->num, 0)),
-				    readl(omap_ssi->sys + SSI_MPU_ENABLE_REG(port->num, 0)));
+				    readl(omap_ssi->sys + SSI_MPU_ENABLE_REG(port->num, 0)),
+				    readl(omap_port->ssr_base + SSI_SSR_MODE_REG),
+				    readl(omap_port->sst_base + SSI_SST_MODE_REG),
+				    ssi_wakein(port),
+				    pm_runtime_active(omap_port->pdev) ? "active" : "suspended");
 		writel_relaxed(SSI_ERROROCCURED,
 			       omap_ssi->sys + SSI_MPU_STATUS_REG(port->num, 0));
 		return;
