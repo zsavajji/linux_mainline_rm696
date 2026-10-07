@@ -876,18 +876,33 @@ static void nokia_bluetooth_serdev_remove(struct serdev_device *serdev)
 }
 
 /*
- * Flow control stays as the set-up leaves it (RTS up) while the chip sleeps: it wakes on its own
- * (inquiry results, Inquiry Complete) and, finding RTS low, loses its first two bytes before a
- * resume raises it (a threaded IRQ, then an async resume; stock's hci_h4p raised it from the
- * hard IRQ). Nor may these touch the port: it's closed while Bluetooth is off (probe).
+ * RTS down while the chip sleeps, up when it wakes (host wakeup) or the host sends: RTS alone,
+ * as stock's hci_h4p. A termios change (flow control) would clear the UART's receive FIFO
+ * (8250_omap's MDR1 erratum path), the chip's first bytes with it. Only between a set-up and
+ * the shutdown (the port is open then; it's closed while Bluetooth is off).
+ * ponytail: rts_delay_us is a test knob, a late RTS as from a UART woken from CORE idle
  */
+static unsigned int rts_delay_us;
+module_param(rts_delay_us, uint, 0644);
+
 static int nokia_bluetooth_runtime_suspend(struct device *dev)
 {
+	struct nokia_bt_dev *btdev = serdev_device_get_drvdata(to_serdev_device(dev));
+
+	if (btdev->initialized)
+		serdev_device_set_rts(btdev->serdev, false);
 	return 0;
 }
 
 static int nokia_bluetooth_runtime_resume(struct device *dev)
 {
+	struct nokia_bt_dev *btdev = serdev_device_get_drvdata(to_serdev_device(dev));
+
+	if (btdev->initialized) {
+		if (rts_delay_us)
+			usleep_range(rts_delay_us, rts_delay_us + 100);
+		serdev_device_set_rts(btdev->serdev, true);
+	}
 	return 0;
 }
 
