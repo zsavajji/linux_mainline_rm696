@@ -26,6 +26,7 @@
 #include <asm/cpuidle.h>
 
 #include "powerdomain.h"
+#include "cm3xxx.h"
 #include "clockdomain.h"
 
 #include "pm.h"
@@ -218,13 +219,25 @@ static int next_valid_state(struct cpuidle_device *dev,
 /* The index of C6, MPU OFF + CORE RET */
 #define OMAP3_IDLE_MPU_OFF_CORE_RET	5
 
+/*
+ * Whether the domains CORE OFF resets will be OFF with it. On 6.18 the hwmods keep the interface
+ * clocks of DSS and USBHOST enabled, so their clockdomains keep their wakeup dependency on the
+ * MPU and read ON whenever this runs; they still go OFF as the MPU sleeps, unless a functional
+ * clock of theirs runs. Nokia's kernel saw them OFF here (its clock usecounts reached 0).
+ */
 static bool omap3_core_off_allowed(void)
 {
+	struct powerdomain *pd;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(core_off_pds); i++)
-		if (core_off_pds[i] && pwrdm_read_pwrst(core_off_pds[i]) > PWRDM_POWER_OFF)
+	for (i = 0; i < ARRAY_SIZE(core_off_pds); i++) {
+		pd = core_off_pds[i];
+		if (!pd || pwrdm_read_pwrst(pd) == PWRDM_POWER_OFF)
+			continue;
+		if (pwrdm_read_next_pwrst(pd) != PWRDM_POWER_OFF ||
+		    omap2_cm_read_mod_reg(pd->prcm_offs, CM_FCLKEN))
 			return false;
+	}
 
 	return true;
 }
