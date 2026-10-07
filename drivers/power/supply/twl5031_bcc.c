@@ -11,6 +11,14 @@
  * a dedicated charger (USB_DCP) 500 mA. BME (bme_RX-71) charges from USB_DCP as from a wall charger,
  * from USB and USB_CDP at 100, 500 or 900 mA by CURRENT_NOW, and not at all for another value.
  *
+ * BME reads the supplies when a "change@.../power_supply/usb" uevent reaches its netlink socket,
+ * which it sizes with SO_RCVBUF 600. On 6.18 that holds about one uevent: one more that comes before
+ * BME has read the first is dropped, along with everything after it until BME drains the queue. The
+ * TWL PHY's own uevents (VBUS online/offline, the usb_phy's charger state) come right before ours, so
+ * BME could miss an unplug, go on charging, and fail at its next 10 s charge check ("Charging
+ * stopped by unknown error", the UI's wrong-charger note). Stock's kernel sent nothing else around
+ * its USB events. So each change is announced once more after the burst, when BME's queue is empty.
+ *
  * ponytail: "vac" is polled every 2 s instead of taken from the charger-detect interrupt.
  */
 #include <linux/module.h>
@@ -24,10 +32,12 @@
 #define TWL5031_BCC_STS		0x02
 #define TWL5031_VAC_P_STS	BIT(3)
 #define TWL5031_BCC_STS_RESET	0xaa	/* no VBUS, no charger: the BCC in reset */
+#define TWL5031_BCC_ANNOUNCE_MS	200	/* after the PHY's uevents; BME needs a few ms for them */
 
 struct twl5031_bcc {
 	struct power_supply *usb, *vac;
 	struct delayed_work work;
+	struct delayed_work announce;		/* the usb state once more after a change */
 	bool usb_present, vac_present;
 	struct power_supply_desc usb_desc;
 	struct usb_phy *phy;
@@ -87,6 +97,12 @@ static void twl5031_bcc_usb_update(struct twl5031_bcc *bcc)
 	bcc->usb_desc.type = type == CDP_TYPE ? POWER_SUPPLY_TYPE_USB_CDP :
 			     type == DCP_TYPE ? POWER_SUPPLY_TYPE_USB_DCP : POWER_SUPPLY_TYPE_USB;
 	power_supply_changed(bcc->usb);
+	mod_delayed_work(system_wq, &bcc->announce, msecs_to_jiffies(TWL5031_BCC_ANNOUNCE_MS));
+}
+
+static void twl5031_bcc_announce(struct work_struct *work)
+{
+	power_supply_changed(container_of(work, struct twl5031_bcc, announce.work)->usb);
 }
 
 static int twl5031_bcc_usb_event(struct notifier_block *nb, unsigned long event, void *data)
@@ -163,6 +179,7 @@ static int twl5031_bcc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, bcc);
 	INIT_DELAYED_WORK(&bcc->work, twl5031_bcc_poll);
+	INIT_DELAYED_WORK(&bcc->announce, twl5031_bcc_announce);
 
 	bcc->nb.notifier_call = twl5031_bcc_usb_event;
 	ret = usb_register_notifier(bcc->phy, &bcc->nb);
@@ -182,6 +199,7 @@ static void twl5031_bcc_remove(struct platform_device *pdev)
 	struct twl5031_bcc *bcc = platform_get_drvdata(pdev);
 
 	usb_unregister_notifier(bcc->phy, &bcc->nb);
+	cancel_delayed_work_sync(&bcc->announce);
 	cancel_delayed_work_sync(&bcc->work);
 }
 
