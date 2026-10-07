@@ -85,7 +85,7 @@ config SND_SOC_NOKIA_RX51
 
 config SND_SOC_NOKIA_DFL61
 	tristate "SoC Audio support for Nokia N9 (DFL61)"
-	depends on ARCH_OMAP3 && I2C && GPIOLIB && TWL4030_CORE && IIO
+	depends on ARCH_OMAP3 && I2C && GPIOLIB && TWL4030_CORE && IIO && INPUT
 	select SND_SOC_OMAP_MCBSP
 	select SND_SOC_TWL4030
 	select SND_SOC_TLV320DAC33

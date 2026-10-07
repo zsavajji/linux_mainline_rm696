@@ -18,6 +18,9 @@
 		jack-gpios = <&twl_gpio 0 GPIO_ACTIVE_HIGH>;	/* AvPlugDet: high when plugged */
 		io-channels = <&twl_madc 10>;			/* ADCIN10: the headset mic line */
 		io-channel-names = "hsmic";
+		interrupts-extended = <&twl 6>;			/* PIH line 6: the ACI block */
+		interrupt-names = "aci";
+		v28-supply = <&vaux1>;				/* the ACI's pull-ups */
 	};
 
 	sound-dac33 {
