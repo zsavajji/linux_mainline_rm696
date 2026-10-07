@@ -2,8 +2,9 @@
 /*
  * The N9's audio as its stock board files had it (board-rm696-audio.c, board-rm696-peripherals.c):
  * the TWL5031's codec on McBSP3 and a TLV320DAC33 on McBSP2 into a TPA6140A2 headphone amp, and the
- * Bluetooth chip's PCM on McBSP4, as the three sound cards of sound/soc/ti/dfl61.c. NOLO leaves the
- * McBSP2/3 pads and McBSP4's (on the GPMC nCS4-7 pads) in McBSP mode.
+ * Bluetooth/FM chip's PCM on McBSP4, as the three sound cards of sound/soc/ti/dfl61.c. NOLO leaves the
+ * McBSP2/3 pads and McBSP4's (on the GPMC nCS4-7 pads) in McBSP mode. The WL1273's FM radio: its
+ * control on I2C3, its analog audio into the TWL5031's AUXL/AUXR, its digital audio on McBSP4.
  */
 
 #include <dt-bindings/gpio/gpio.h>
@@ -29,12 +30,7 @@
 	sound-bt {
 		compatible = "nokia,dfl61-wl1273";
 		nokia,mcbsp = <&mcbsp4>;
-		nokia,audio-codec = <&bt_sco>;
-	};
-
-	bt_sco: bt-sco {
-		compatible = "linux,bt-sco";
-		#sound-dai-cells = <0>;
+		nokia,audio-codec = <&wl1273>;	/* its codec child */
 	};
 };
 
@@ -90,5 +86,19 @@
 		compatible = "ti,tpa6140a2";
 		reg = <0x60>;
 		sound-name-prefix = "TPA6140A2";
+	};
+};
+
+/*
+ * The WL1273's FM part, as stock's board-rm696-peripherals.c had it: I2C3 0x22, its interrupt on
+ * GPIO 43, its enable (stock's "reset") on GPIO 178 from board revision S1.1 on (GPIO 179 before,
+ * whose pad the vibra's McSPI2 data took). As stock, no pinmux here: the pads stay as NOLO set them.
+ */
+&i2c3 {
+	wl1273: fm@22 {
+		compatible = "ti,wl1273-fm";
+		reg = <0x22>;
+		interrupts-extended = <&gpio2 11 IRQ_TYPE_EDGE_FALLING>;	/* gpio 43 */
+		enable-gpios = <&gpio6 18 GPIO_ACTIVE_HIGH>;			/* gpio 178 */
 	};
 };

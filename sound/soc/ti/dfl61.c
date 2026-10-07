@@ -23,6 +23,7 @@
 #include <sound/soc.h>
 
 #include "../codecs/tlv320dac33.h"
+#include "../codecs/wl1273.h"
 
 static struct gpio_desc *dfl61_ihf_gpio;
 static struct snd_soc_card dfl61_twl_card;
@@ -445,20 +446,37 @@ static struct snd_soc_card dfl61_dac33_card = {
 };
 
 /*
- * The Bluetooth PCM card, "dfl61-wl1273" as stock (PulseAudio's sink.hw1/source.hw1 for SCO over PCM):
- * the BT chip's PCM on McBSP4 (NOLO muxes it on the GPMC nCS4-7 pads). The chip's firmware sets the
- * PCM up (TI's Write CODEC Config: master, 8 kHz frames, one 16-bit slot a clock after the frame
- * sync), so the generic bt-sco codec stands in for stock's WL1273 one, which also had FM modes
+ * The Bluetooth/FM PCM card, "dfl61-wl1273" as stock: the WL1273's PCM on McBSP4 (NOLO muxes it on
+ * the GPMC nCS4-7 pads), with Nokia's WL1273 codec. Bluetooth SCO by default (PulseAudio's
+ * sink.hw1/source.hw1, 8 kHz mono): the chip's firmware sets that PCM up (TI's Write CODEC Config:
+ * master, 8 kHz frames, one 16-bit slot a clock after the frame sync, i.e. DSP_A). FM ("Codec Mode"
+ * FmRx/FmTx, fmrxd's 48 kHz stereo capture) is I2S, the chip master too, as Nokia's dfl61-wl1273.c.
  */
 SND_SOC_DAILINK_DEFS(bt,
 	DAILINK_COMP_ARRAY(COMP_EMPTY()),
-	DAILINK_COMP_ARRAY(COMP_CODEC(NULL, "bt-sco-pcm")),
+	DAILINK_COMP_ARRAY(COMP_CODEC(NULL, "wl1273-fm")),
 	DAILINK_COMP_ARRAY(COMP_EMPTY()));
+
+static int dfl61_bt_startup(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+
+	if (wl1273_get_codec_mode(snd_soc_rtd_to_codec(rtd, 0)->component) == WL1273_MODE_BT)
+		return snd_soc_runtime_set_dai_fmt(rtd, SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF |
+						   SND_SOC_DAIFMT_CBP_CFP);
+	return snd_soc_runtime_set_dai_fmt(rtd, SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
+					   SND_SOC_DAIFMT_CBP_CFP);
+}
+
+static const struct snd_soc_ops dfl61_bt_ops = {
+	.startup = dfl61_bt_startup,
+};
 
 static struct snd_soc_dai_link dfl61_bt_link = {
 	.name = "BT/FM PCM",
 	.stream_name = "BT/FM Stream",
 	.dai_fmt = SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF | SND_SOC_DAIFMT_CBP_CFP,
+	.ops = &dfl61_bt_ops,
 	SND_SOC_DAILINK_REG(bt),
 };
 

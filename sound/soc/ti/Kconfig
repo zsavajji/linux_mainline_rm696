@@ -90,9 +90,12 @@ config SND_SOC_NOKIA_DFL61
 	select SND_SOC_TWL4030
 	select SND_SOC_TLV320DAC33
 	select SND_SOC_TPA6130A2
+	select SND_SOC_WL1273
+	depends on MFD_WL1273_CORE
 	help
 	  Say Y or M if you want to add support for SoC audio on the Nokia N9: the cards
-	  of its stock kernel (dfl61-twl4030, dfl61-dac33), which its PulseAudio expects.
+	  of its stock kernel (dfl61-twl4030, dfl61-dac33, dfl61-wl1273), which its
+	  PulseAudio expects.
 
 config SND_SOC_OMAP3_PANDORA
 	tristate "SoC Audio support for OMAP3 Pandora"
