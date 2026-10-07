@@ -831,10 +831,19 @@ static int nokia_hci_close(struct hci_dev *hdev)
 {
 	struct hci_uart *hu = hci_get_drvdata(hdev);
 	struct nokia_bt_dev *btdev = hu->priv;
+	int err;
 
 	nokia_hold_uart(btdev);
 	nokia_stop_tx(btdev);
-	return btdev->hci_close(hdev);
+	err = btdev->hci_close(hdev);
+	/*
+	 * The port is closed, nothing more is received: a frame the power-off cut short goes too,
+	 * or the next power-on's set-up would read its first frames into it (negotiation timeout)
+	 */
+	kfree_skb(btdev->rx_skb);
+	btdev->rx_skb = NULL;
+	hu->padding = 0;
+	return err;
 }
 
 /*
