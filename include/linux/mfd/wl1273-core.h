@@ -4,18 +4,23 @@
  *
  * Some definitions for the wl1273 radio receiver/transmitter chip.
  *
- * Copyright (C) 2010 Nokia Corporation
+ * Nokia's driver as its Harmattan kernel (2.6.32) had it: all the chip's logic in the core, shared
+ * by the V4L2 radio (/dev/radio0) and the ASoC codec of the "dfl61-wl1273" card.
+ *
+ * Copyright (C) Nokia Corporation
  * Author: Matti J. Aaltonen <matti.j.aaltonen@nokia.com>
  */
 
 #ifndef WL1273_CORE_H
 #define WL1273_CORE_H
 
+#include <linux/completion.h>
 #include <linux/i2c.h>
 #include <linux/mfd/core.h>
+#include <linux/mutex.h>
+#include <linux/wait.h>
 
 #define WL1273_FM_DRIVER_NAME	"wl1273-fm"
-#define RX71_FM_I2C_ADDR	0x22
 
 #define WL1273_STEREO_GET		0
 #define WL1273_RSSI_LVL_GET		1
@@ -70,49 +75,49 @@
 
 /* Transmitter API */
 
-#define WL1273_CHANL_SET			55
-#define WL1273_SCAN_SPACING_SET			56
-#define WL1273_REF_SET				57
-#define WL1273_POWER_ENB_SET			90
-#define WL1273_POWER_ATT_SET			58
-#define WL1273_POWER_LEV_SET			59
-#define WL1273_AUDIO_DEV_SET			60
-#define WL1273_PILOT_DEV_SET			61
-#define WL1273_RDS_DEV_SET			62
-#define WL1273_PUPD_SET				91
-#define WL1273_AUDIO_IO_SET			63
-#define WL1273_PREMPH_SET			64
-#define WL1273_MONO_SET				66
-#define WL1273_MUTE				92
-#define WL1273_MPX_LMT_ENABLE			67
-#define WL1273_PI_SET				93
-#define WL1273_ECC_SET				69
-#define WL1273_PTY				70
-#define WL1273_AF				71
-#define WL1273_DISPLAY_MODE			74
-#define WL1273_RDS_REP_SET			77
-#define WL1273_RDS_CONFIG_DATA_SET		98
-#define WL1273_RDS_DATA_SET			99
-#define WL1273_RDS_DATA_ENB			94
-#define WL1273_TA_SET				78
-#define WL1273_TP_SET				79
-#define WL1273_DI_SET				80
-#define WL1273_MS_SET				81
-#define WL1273_PS_SCROLL_SPEED			82
-#define WL1273_TX_AUDIO_LEVEL_TEST		96
+#define WL1273_CHANL_SET		55
+#define WL1273_SCAN_SPACING_SET		56
+#define WL1273_REF_SET			57
+#define WL1273_POWER_ENB_SET		90
+#define WL1273_POWER_ATT_SET		58
+#define WL1273_POWER_LEV_SET		59
+#define WL1273_AUDIO_DEV_SET		60
+#define WL1273_PILOT_DEV_SET		61
+#define WL1273_RDS_DEV_SET		62
+#define WL1273_PUPD_SET			91
+#define WL1273_AUDIO_IO_SET		63
+#define WL1273_PREMPH_SET		64
+#define WL1273_MONO_SET			66
+#define WL1273_MUTE			92
+#define WL1273_MPX_LMT_ENABLE		67
+#define WL1273_PI_SET			93
+#define WL1273_ECC_SET			69
+#define WL1273_PTY			70
+#define WL1273_AF			71
+#define WL1273_DISPLAY_MODE		74
+#define WL1273_RDS_REP_SET		77
+#define WL1273_RDS_CONFIG_DATA_SET	98
+#define WL1273_RDS_DATA_SET		99
+#define WL1273_RDS_DATA_ENB		94
+#define WL1273_TA_SET			78
+#define WL1273_TP_SET			79
+#define WL1273_DI_SET			80
+#define WL1273_MS_SET			81
+#define WL1273_PS_SCROLL_SPEED		82
+#define WL1273_TX_AUDIO_LEVEL_TEST	96
 #define WL1273_TX_AUDIO_LEVEL_TEST_THRESHOLD	73
 #define WL1273_TX_AUDIO_INPUT_LEVEL_RANGE_SET	54
-#define WL1273_RX_ANTENNA_SELECT		87
-#define WL1273_I2C_DEV_ADDR_SET			86
+#define WL1273_RX_ANTENNA_SELECT	87
+#define WL1273_I2C_DEV_ADDR_SET		86
 #define WL1273_REF_ERR_CALIB_PARAM_SET		88
 #define WL1273_REF_ERR_CALIB_PERIODICITY_SET	89
 #define WL1273_SOC_INT_TRIGGER			52
 #define WL1273_SOC_AUDIO_PATH_SET		83
 #define WL1273_SOC_PCMI_OVERRIDE		84
-#define WL1273_SOC_I2S_OVERRIDE			85
-#define WL1273_RSSI_BLOCK_SCAN_FREQ_SET		95
-#define WL1273_RSSI_BLOCK_SCAN_START		97
-#define WL1273_RSSI_BLOCK_SCAN_DATA_GET		5
+#define WL1273_SOC_I2S_OVERRIDE		85
+#define WL1273_RSSI_BLOCK_SCAN_FREQ_SET	95
+#define WL1273_RSSI_BLOCK_SCAN_START	97
+#define WL1273_RSSI_BLOCK_SCAN_DATA_GET	 5
 #define WL1273_READ_FMANT_TUNE_VALUE		104
 
 #define WL1273_RDS_OFF		0
@@ -122,13 +127,15 @@
 #define WL1273_AUDIO_DIGITAL	0
 #define WL1273_AUDIO_ANALOG	1
 
-#define WL1273_MODE_RX		BIT(0)
-#define WL1273_MODE_TX		BIT(1)
-#define WL1273_MODE_OFF		BIT(2)
-#define WL1273_MODE_SUSPENDED	BIT(3)
+#define WL1273_SPACING_50KHZ	0
+#define WL1273_SPACING_100KHZ	1
+#define WL1273_SPACING_200KHZ	2
 
-#define WL1273_RADIO_CHILD	BIT(0)
-#define WL1273_CODEC_CHILD	BIT(1)
+/* The "Mode Switch" control's values */
+#define WL1273_MODE_RX		0
+#define WL1273_MODE_TX		1
+#define WL1273_MODE_OFF		2
+#define WL1273_MODE_SUSPENDED	3
 
 #define WL1273_RX_MONO		1
 #define WL1273_RX_STEREO	0
@@ -138,140 +145,96 @@
 #define WL1273_MAX_VOLUME	0xffff
 #define WL1273_DEFAULT_VOLUME	0x78b8
 
-/* I2S protocol, left channel first, data width 16 bits */
-#define WL1273_PCM_DEF_MODE		0x00
+#define WL1273_FR_EVENT			(1 << 0)
+#define WL1273_BL_EVENT			(1 << 1)
+#define WL1273_RDS_EVENT		(1 << 2)
+#define WL1273_BBLK_EVENT		(1 << 3)
+#define WL1273_LSYNC_EVENT		(1 << 4)
+#define WL1273_LEV_EVENT		(1 << 5)
+#define WL1273_IFFR_EVENT		(1 << 6)
+#define WL1273_PI_EVENT			(1 << 7)
+#define WL1273_PD_EVENT			(1 << 8)
+#define WL1273_STIC_EVENT		(1 << 9)
+#define WL1273_MAL_EVENT		(1 << 10)
+#define WL1273_POW_ENB_EVENT		(1 << 11)
+#define WL1273_SCAN_OVER_EVENT		(1 << 12)
+#define WL1273_ERROR_EVENT		(1 << 13)
 
-/* Rx */
-#define WL1273_AUDIO_ENABLE_I2S		BIT(0)
-#define WL1273_AUDIO_ENABLE_ANALOG	BIT(1)
-
-/* Tx */
-#define WL1273_AUDIO_IO_SET_ANALOG	0
-#define WL1273_AUDIO_IO_SET_I2S		1
-
-#define WL1273_PUPD_SET_OFF		0x00
-#define WL1273_PUPD_SET_ON		0x01
-#define WL1273_PUPD_SET_RETENTION	0x10
-
-/* I2S mode */
-#define WL1273_IS2_WIDTH_32	0x0
-#define WL1273_IS2_WIDTH_40	0x1
-#define WL1273_IS2_WIDTH_22_23	0x2
-#define WL1273_IS2_WIDTH_23_22	0x3
-#define WL1273_IS2_WIDTH_48	0x4
-#define WL1273_IS2_WIDTH_50	0x5
-#define WL1273_IS2_WIDTH_60	0x6
-#define WL1273_IS2_WIDTH_64	0x7
-#define WL1273_IS2_WIDTH_80	0x8
-#define WL1273_IS2_WIDTH_96	0x9
-#define WL1273_IS2_WIDTH_128	0xa
-#define WL1273_IS2_WIDTH	0xf
-
-#define WL1273_IS2_FORMAT_STD	(0x0 << 4)
-#define WL1273_IS2_FORMAT_LEFT	(0x1 << 4)
-#define WL1273_IS2_FORMAT_RIGHT	(0x2 << 4)
-#define WL1273_IS2_FORMAT_USER	(0x3 << 4)
-
-#define WL1273_IS2_MASTER	(0x0 << 6)
-#define WL1273_IS2_SLAVEW	(0x1 << 6)
-
-#define WL1273_IS2_TRI_AFTER_SENDING	(0x0 << 7)
-#define WL1273_IS2_TRI_ALWAYS_ACTIVE	(0x1 << 7)
-
-#define WL1273_IS2_SDOWS_RR	(0x0 << 8)
-#define WL1273_IS2_SDOWS_RF	(0x1 << 8)
-#define WL1273_IS2_SDOWS_FR	(0x2 << 8)
-#define WL1273_IS2_SDOWS_FF	(0x3 << 8)
-
-#define WL1273_IS2_TRI_OPT	(0x0 << 10)
-#define WL1273_IS2_TRI_ALWAYS	(0x1 << 10)
-
-#define WL1273_IS2_RATE_48K	(0x0 << 12)
-#define WL1273_IS2_RATE_44_1K	(0x1 << 12)
-#define WL1273_IS2_RATE_32K	(0x2 << 12)
-#define WL1273_IS2_RATE_22_05K	(0x4 << 12)
-#define WL1273_IS2_RATE_16K	(0x5 << 12)
-#define WL1273_IS2_RATE_12K	(0x8 << 12)
-#define WL1273_IS2_RATE_11_025	(0x9 << 12)
-#define WL1273_IS2_RATE_8K	(0xa << 12)
-#define WL1273_IS2_RATE		(0xf << 12)
-
-#define WL1273_I2S_DEF_MODE	(WL1273_IS2_WIDTH_32 | \
-				 WL1273_IS2_FORMAT_STD | \
-				 WL1273_IS2_MASTER | \
-				 WL1273_IS2_TRI_AFTER_SENDING | \
-				 WL1273_IS2_SDOWS_RR | \
-				 WL1273_IS2_TRI_OPT | \
-				 WL1273_IS2_RATE_48K)
-
-#define SCHAR_MIN (-128)
-#define SCHAR_MAX 127
-
-#define WL1273_FR_EVENT			BIT(0)
-#define WL1273_BL_EVENT			BIT(1)
-#define WL1273_RDS_EVENT		BIT(2)
-#define WL1273_BBLK_EVENT		BIT(3)
-#define WL1273_LSYNC_EVENT		BIT(4)
-#define WL1273_LEV_EVENT		BIT(5)
-#define WL1273_IFFR_EVENT		BIT(6)
-#define WL1273_PI_EVENT			BIT(7)
-#define WL1273_PD_EVENT			BIT(8)
-#define WL1273_STIC_EVENT		BIT(9)
-#define WL1273_MAL_EVENT		BIT(10)
-#define WL1273_POW_ENB_EVENT		BIT(11)
-#define WL1273_SCAN_OVER_EVENT		BIT(12)
-#define WL1273_ERROR_EVENT		BIT(13)
-
-#define TUNER_MODE_STOP_SEARCH		0
-#define TUNER_MODE_PRESET		1
-#define TUNER_MODE_AUTO_SEEK		2
-#define TUNER_MODE_AF			3
-#define TUNER_MODE_AUTO_SEEK_PI		4
-#define TUNER_MODE_AUTO_SEEK_BULK	5
-
-#define RDS_BLOCK_SIZE	3
-
-struct wl1273_fm_platform_data {
-	int (*request_resources) (struct i2c_client *client);
-	void (*free_resources) (void);
-	void (*enable) (void);
-	void (*disable) (void);
-
-	u8 forbidden_modes;
-	unsigned int children;
+struct region_info {
+	u32 bottom_frequency;
+	u32 top_frequency;
+	u8 region;
 };
 
 #define WL1273_FM_CORE_CELLS	2
 
-#define WL1273_BAND_OTHER	0
-#define WL1273_BAND_JAPAN	1
-
-#define WL1273_BAND_JAPAN_LOW	76000
-#define WL1273_BAND_JAPAN_HIGH	90000
-#define WL1273_BAND_OTHER_LOW	87500
-#define WL1273_BAND_OTHER_HIGH	108000
-
-#define WL1273_BAND_TX_LOW	76000
-#define WL1273_BAND_TX_HIGH	108000
-
 struct wl1273_core {
 	struct mfd_cell cells[WL1273_FM_CORE_CELLS];
-	struct wl1273_fm_platform_data *pdata;
+	struct i2c_client *i2c_dev;
+	struct gpio_desc *enable_gpio;	/* the FM part's enable (stock's "reset" GPIO) */
 
+	/* driver management */
 	unsigned int mode;
-	unsigned int i2s_mode;
-	unsigned int volume;
+	unsigned int preemphasis;
 	unsigned int audio_mode;
+	unsigned int tx_power;
+	unsigned int spacing;
+	unsigned int rx_frequency;
+	unsigned int tx_frequency;
+	unsigned int region;
+	unsigned int i2s_mode;
 	unsigned int channel_number;
+	unsigned int volume;
+	bool rds_on;
+	int search_level;
+
+	const struct region_info *regions;
+
+	/* RDS */
+	wait_queue_head_t read_queue;
 	struct mutex lock; /* for serializing fm radio operations */
+	struct completion busy;
 
-	struct i2c_client *client;
+	unsigned char *buffer;
+	unsigned int buf_size;
+	unsigned int rd_index;
+	unsigned int wr_index;
 
-	int (*read)(struct wl1273_core *core, u8, u16 *);
-	int (*write)(struct wl1273_core *core, u8, u16);
-	int (*write_data)(struct wl1273_core *core, u8 *, u16);
-	int (*set_audio)(struct wl1273_core *core, unsigned int);
-	int (*set_volume)(struct wl1273_core *core, unsigned int);
+	/* Selected interrupts */
+	u16 irq_flags;
+	u16 irq_received;
 };
+
+int wl1273_fm_write_cmd(struct wl1273_core *core, u8 cmd, u16 param);
+int wl1273_fm_write_data(struct wl1273_core *core, u8 *data, u16 len);
+int wl1273_fm_read_reg(struct wl1273_core *core, u8 reg, u16 *value);
+int wl1273_fm_get_freq(struct wl1273_core *core);
+int wl1273_fm_set_tx_freq(struct wl1273_core *core, unsigned int freq);
+int wl1273_fm_set_rx_freq(struct wl1273_core *core, unsigned int freq);
+int wl1273_fm_set_seek(struct wl1273_core *core,
+		       unsigned int wrap_around,
+		       unsigned int seek_upward);
+
+int wl1273_fm_set_channel_number(struct wl1273_core *core, int ch_num);
+int wl1273_fm_set_i2s_mode(struct wl1273_core *core, int rate, int width);
+
+unsigned int wl1273_fm_get_tx_ctune(struct wl1273_core *core);
+unsigned int wl1273_fm_get_audio(struct wl1273_core *core);
+int wl1273_fm_set_audio(struct wl1273_core *core, unsigned int mode);
+int wl1273_fm_tx_get_spacing(struct wl1273_core *core);
+int wl1273_fm_tx_set_spacing(struct wl1273_core *core, unsigned int spa);
+unsigned int wl1273_fm_get_preemphasis(struct wl1273_core *core);
+int wl1273_fm_set_preemphasis(struct wl1273_core *core, unsigned int emph);
+unsigned int wl1273_fm_get_tx_power(struct wl1273_core *core);
+int wl1273_fm_set_tx_power(struct wl1273_core *core, u16 p);
+unsigned int wl1273_fm_get_mode(struct wl1273_core *core);
+int wl1273_fm_set_mode(struct wl1273_core *core, int mode);
+u8 wl1273_fm_get_region(struct wl1273_core *core);
+int wl1273_fm_set_region(struct wl1273_core *core, unsigned int region);
+int wl1273_fm_get_rds(struct wl1273_core *core);
+int wl1273_fm_set_rds(struct wl1273_core *core, unsigned int mode);
+int wl1273_fm_get_search_level(struct wl1273_core *core);
+int wl1273_fm_set_search_level(struct wl1273_core *core, s16 level);
+int wl1273_fm_set_volume(struct wl1273_core *core, u16 volume);
 
 #endif	/* ifndef WL1273_CORE_H */
