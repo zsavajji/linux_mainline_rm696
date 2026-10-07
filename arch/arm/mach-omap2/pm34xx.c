@@ -208,6 +208,77 @@ static void omap3_io_wakeup_disable(void)
 	omap2_prm_write_mod_reg(OMAP3430_ST_IO_CHAIN_MASK, WKUP_MOD, PM_WKST);
 }
 
+/*
+ * DM3730 erratum 1.45 (SPRZ319F): GPIO banks 2-6 come back from OFF as inputs, and their outputs
+ * can glitch on the way in and out. Workaround, as Nokia's N9 kernel did it around PER OFF
+ * (plat-omap/gpio.c, omap_gpio_save_context() and omap3_gpio_restore_pad_context()): each
+ * output held by its pad's pull at the level it drives, the GPIO switched to input, the pad to
+ * safe mode; after the wakeup the outputs and the pads restored. Nokia's GPIO-to-pad table, for
+ * the GPIOs above 31 (bank 1 is in WKUP).
+ */
+static const struct {
+	u8 min, max;
+	u16 offset;
+} gpio_pad_ranges[] = {
+	{ 34, 43, 0x7a }, { 44, 51, 0x9e }, { 52, 59, 0xb0 }, { 60, 62, 0xc6 },
+	{ 63, 111, 0xce }, { 167, 167, 0x130 }, { 126, 126, 0x132 }, { 112, 125, 0x134 },
+	{ 130, 166, 0x158 }, { 120, 122, 0x1a2 }, { 124, 125, 0x1a8 }, { 130, 131, 0x1ac },
+	{ 169, 169, 0x1b0 }, { 188, 191, 0x1b2 }, { 168, 168, 0x1be }, { 183, 185, 0x1c0 },
+	{ 170, 182, 0x1c6 }, { 186, 186, 0x1e2 }, { 187, 187, 0x23a }, { 32, 32, 0x238 },
+	{ 127, 127, 0xa54 }, { 126, 126, 0xa56 }, { 128, 129, 0xa58 },
+};
+#define GPIO_BANK(gpio)		(gpio_banks + ((gpio) / 32 - 1) * 0x2000)	/* GPIO2 at 0x49050000 */
+#define GPIO_OE			0x34
+#define GPIO_DATAOUT		0x3c
+#define PAD_IN_PD_GPIO		0x10c
+#define PAD_IN_PU_GPIO		0x11c
+#define PAD_SAFE_MODE		0x7
+
+static void __iomem *gpio_banks;
+static u32 gpio_saved_oe[5];
+static struct { u16 offset, pad; } gpio_held[168];	/* every GPIO in gpio_pad_ranges */
+static int gpio_nheld;
+
+static void omap3_gpio_pads_hold(void)
+{
+	u32 oe[5];
+	int i, gpio, b;
+
+	for (b = 0; b < 5; b++)
+		oe[b] = gpio_saved_oe[b] = readl_relaxed(gpio_banks + b * 0x2000 + GPIO_OE);
+
+	gpio_nheld = 0;
+	for (i = 0; i < ARRAY_SIZE(gpio_pad_ranges); i++) {
+		for (gpio = gpio_pad_ranges[i].min; gpio <= gpio_pad_ranges[i].max; gpio++) {
+			u16 offset = gpio_pad_ranges[i].offset + 2 * (gpio - gpio_pad_ranges[i].min);
+			u16 pad = omap_ctrl_readw(offset);
+			void __iomem *base = GPIO_BANK(gpio);
+			u32 bit = BIT(gpio % 32);
+
+			b = gpio / 32 - 1;
+			if ((pad & 0x7) != 4 || (oe[b] & bit))
+				continue;
+			gpio_held[gpio_nheld].offset = offset;
+			gpio_held[gpio_nheld++].pad = pad;
+			pad = readl_relaxed(base + GPIO_DATAOUT) & bit ? PAD_IN_PU_GPIO : PAD_IN_PD_GPIO;
+			omap_ctrl_writew(pad, offset);
+			oe[b] |= bit;
+			writel_relaxed(oe[b], base + GPIO_OE);
+			omap_ctrl_writew(pad | PAD_SAFE_MODE, offset);
+		}
+	}
+}
+
+static void omap3_gpio_pads_restore(void)
+{
+	int i;
+
+	for (i = 0; i < 5; i++)
+		writel_relaxed(gpio_saved_oe[i], gpio_banks + i * 0x2000 + GPIO_OE);
+	for (i = 0; i < gpio_nheld; i++)
+		omap_ctrl_writew(gpio_held[i].pad, gpio_held[i].offset);
+}
+
 static void omap34xx_save_context(u32 *save)
 {
 	u32 val;
@@ -242,7 +313,7 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	int per_next_state = PWRDM_POWER_ON;
 	int core_next_state = PWRDM_POWER_ON;
 	u32 sdrc_pwr = 0;
-	bool core_off_refused = false, per_off_refused = false;
+	bool core_off_refused = false, per_off_refused = false, per_wkdep = false;
 	int error;
 
 	mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
@@ -303,8 +374,10 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 
 	/* PER */
 	if (per_next_state == PWRDM_POWER_OFF) {
+		omap3_gpio_pads_hold();
 		error = cpu_cluster_pm_enter();
 		if (error) {
+			omap3_gpio_pads_restore();
 			if (core_next_state < PWRDM_POWER_ON)
 				omap3_l3_idle_exit();
 			return;
@@ -316,6 +389,9 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		if (core_next_state == PWRDM_POWER_OFF) {
 			omap3_core_save_context();
 			omap3_cm_save_context();
+			/* PER wakes with WKUP (erratum 1.45; Nokia's kernel: GPIO errata i467, i468) */
+			omap2_prm_set_mod_reg_bits(OMAP_EN_WKUP_MASK, OMAP3430_PER_MOD, PM_WKDEP);
+			per_wkdep = true;
 		}
 	}
 
@@ -396,12 +472,16 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		omap3_io_wakeup_disable();
 		omap3_l3_idle_exit();
 	}
+	if (per_wkdep)
+		omap2_prm_clear_mod_reg_bits(OMAP_EN_WKUP_MASK, OMAP3430_PER_MOD, PM_WKDEP);
 
 	pwrdm_post_transition(NULL);
 
 	/* PER */
-	if (per_next_state == PWRDM_POWER_OFF)
+	if (per_next_state == PWRDM_POWER_OFF) {
 		cpu_cluster_pm_exit();
+		omap3_gpio_pads_restore();
+	}
 
 	if (core_off_refused)
 		pwrdm_set_next_pwrst(core_pwrdm, PWRDM_POWER_OFF);
@@ -628,6 +708,10 @@ int __init omap3_pm_init(void)
 
 	if (!omap3_has_io_chain_ctrl())
 		pr_warn("PM: no software I/O chain control; some wakeups may be lost\n");
+
+	gpio_banks = ioremap(0x49050000, 0x9000);	/* GPIO2-6 */
+	if (!gpio_banks)
+		return -ENOMEM;
 
 	pm_errata_configure();
 
