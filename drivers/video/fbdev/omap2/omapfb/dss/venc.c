@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/clk.h>
+#include <linux/clk/ti.h>
 #include <linux/err.h>
 #include <linux/export.h>
 #include <linux/io.h>
@@ -384,6 +385,8 @@ static int venc_power_on(struct omap_dss_device *dssdev)
 	u32 l;
 	int r;
 
+	omap3_l3_hold(OMAP3_L3_DSS);	/* as for the LCD (panel-dsi-cm) */
+
 	r = venc_runtime_get();
 	if (r)
 		goto err0;
@@ -426,6 +429,7 @@ err1:
 
 	venc_runtime_put();
 err0:
+	omap3_l3_release(OMAP3_L3_DSS);
 	return r;
 }
 
@@ -441,6 +445,7 @@ static void venc_power_off(struct omap_dss_device *dssdev)
 	regulator_disable(venc.vdda_dac_reg);
 
 	venc_runtime_put();
+	omap3_l3_release(OMAP3_L3_DSS);
 }
 
 static int venc_display_enable(struct omap_dss_device *dssdev)
