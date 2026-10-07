@@ -231,6 +231,15 @@
 	ti,no-reset-on-init;
 };
 
+/*
+ * GPIO 92 gates sys_clkreq and sys_off_mode onto the front white and back red lights (R&D sleep
+ * indicators). Off at boot, as stock drove GPIO 92 low (board-gpio-export.c); writing 1 to
+ * /sys/class/leds/debug::sleep/brightness shows them: dark while the device is in retention or off
+ */
+&{/leds/heartbeat} {
+	/delete-property/ linux,default-trigger;
+};
+
 &dsi {
 	status = "okay";
 
