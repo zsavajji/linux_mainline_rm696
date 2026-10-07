@@ -152,6 +152,10 @@ struct nokia_bt_dev {
 	bool uart_released;
 	int (*hci_close)(struct hci_dev *hdev);
 
+	struct mutex tx_lock;		/* tx_enabled, tx_idle */
+	bool tx_idle;
+	struct delayed_work tx_release;
+
 	unsigned long rx_last;
 };
 
@@ -730,6 +734,29 @@ static int nokia_recv(struct hci_uart *hu, const void *data, int count)
 	return count;
 }
 
+/*
+ * The end of a transmission (BT wakeup down, the serdev device released) once the UART has sent
+ * everything, 100 ms after the queue ran dry, as stock's hci_h4p released its clocks (lazy_release);
+ * a frame queued before then carries the burst on. Waiting for the UART in nokia_dequeue() held up
+ * the next frame for the serial core's tx_empty polling, a tick or two (~22 ms) after every burst:
+ * half the throughput of a ping-pong exchange.
+ */
+#define NOKIA_TX_RELEASE_MS	100
+
+static void nokia_tx_release(struct work_struct *work)
+{
+	struct nokia_bt_dev *btdev = container_of(work, struct nokia_bt_dev, tx_release.work);
+
+	mutex_lock(&btdev->tx_lock);
+	if (btdev->tx_enabled && btdev->tx_idle) {
+		serdev_device_wait_until_sent(btdev->serdev, 0);
+		gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
+		pm_runtime_put(&btdev->serdev->dev);
+		btdev->tx_enabled = false;
+	}
+	mutex_unlock(&btdev->tx_lock);
+}
+
 static struct sk_buff *nokia_dequeue(struct hci_uart *hu)
 {
 	struct nokia_bt_dev *btdev = hu->priv;
@@ -739,19 +766,17 @@ static struct sk_buff *nokia_dequeue(struct hci_uart *hu)
 	if (!btdev->initialized)
 		return result;
 
-	if (btdev->tx_enabled == !!result)
-		return result;
-
-	if (result) {
+	mutex_lock(&btdev->tx_lock);
+	btdev->tx_idle = !result;
+	if (result && !btdev->tx_enabled) {
 		pm_runtime_get_sync(dev);
 		gpiod_set_value_cansleep(btdev->wakeup_bt, 1);
-	} else {
-		serdev_device_wait_until_sent(btdev->serdev, 0);
-		gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
-		pm_runtime_put(dev);
+		btdev->tx_enabled = true;
+	} else if (!result && btdev->tx_enabled) {
+		mod_delayed_work(system_wq, &btdev->tx_release,
+				 msecs_to_jiffies(NOKIA_TX_RELEASE_MS));
 	}
-
-	btdev->tx_enabled = !!result;
+	mutex_unlock(&btdev->tx_lock);
 
 	return result;
 }
@@ -782,6 +807,17 @@ static void nokia_hold_uart(struct nokia_bt_dev *btdev)
 	pm_runtime_put(dev);
 }
 
+/*
+ * No transmission left under way, its runtime PM reference put or left to the next set-up (one
+ * still waiting for the UART would put it again after the set-up has: an underflow), and nothing
+ * left to touch the port once it closes
+ */
+static void nokia_stop_tx(struct nokia_bt_dev *btdev)
+{
+	flush_work(&btdev->hu.write_work);
+	cancel_delayed_work_sync(&btdev->tx_release);
+}
+
 /* Every close (power-off, a failed power-on, unbind: no shutdown then) */
 static int nokia_hci_close(struct hci_dev *hdev)
 {
@@ -789,6 +825,7 @@ static int nokia_hci_close(struct hci_dev *hdev)
 	struct nokia_bt_dev *btdev = hu->priv;
 
 	nokia_hold_uart(btdev);
+	nokia_stop_tx(btdev);
 	return btdev->hci_close(hdev);
 }
 
@@ -805,11 +842,7 @@ static int nokia_shutdown(struct hci_dev *hdev)
 
 	nokia_hold_uart(btdev);
 	nokia_flow_control(btdev->serdev, false);
-	/*
-	 * A transmission under way ends here, its runtime PM reference put: one left waiting for the
-	 * FIFO would put it again after the next set-up has (tx_enabled), an underflow
-	 */
-	flush_work(&hu->write_work);
+	nokia_stop_tx(btdev);	/* flow control off first: nothing can hold the FIFO */
 	gpiod_set_value_cansleep(btdev->wakeup_bt, 0);
 	gpiod_set_value_cansleep(btdev->reset, 1);
 	return 0;
@@ -878,6 +911,8 @@ static int nokia_bluetooth_serdev_probe(struct serdev_device *serdev)
 	clk_disable_unprepare(sysclk);
 
 	skb_queue_head_init(&btdev->txq);
+	mutex_init(&btdev->tx_lock);
+	INIT_DELAYED_WORK(&btdev->tx_release, nokia_tx_release);
 
 	btdev->hu.priv = btdev;
 	btdev->hu.alignment = 2; /* Nokia H4+ is word aligned */
