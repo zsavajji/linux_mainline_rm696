@@ -51,6 +51,17 @@ static unsigned long vdd2_uv(unsigned long sdrc_rate)
 	return sdrc_rate <= 100000000 ? VDD2_OPP50_UV : VDD2_OPP100_UV;
 }
 
+/* the SRAM routine's wait for the SDRC after the switch, in loops at this MPU rate */
+static u32 sdrc_mpu_loops(unsigned long mpurate_mhz)
+{
+	u32 c = (mpurate_mhz << SDRC_MPURATE_SCALE) >> SDRC_MPURATE_BASE_SHIFT;
+
+	c += 1;  /* for safety */
+	c *= SDRC_MPURATE_LOOPS;
+	c >>= SDRC_MPURATE_SCALE;
+	return c ?: 1;
+}
+
 /**
  * omap3_core_dpll_m2_set_rate - set CORE DPLL M2 divider
  * @rate: new dpll3_m2_ck rate
@@ -65,7 +76,7 @@ int omap3_core_dpll_m2_set_rate(unsigned long rate, unsigned long clkrate, u32 n
 	struct omap_sdrc_params *sdrc_cs0, *sdrc_cs1;
 	struct voltagedomain *vdd2;
 	struct clk *sdrc_ick, *arm_fck;
-	unsigned long sdrcrate, mpurate, flags;
+	unsigned long sdrcrate, flags;
 	u32 unlock_dll = 0, c;
 	int ret = 0;
 
@@ -94,13 +105,7 @@ int omap3_core_dpll_m2_set_rate(unsigned long rate, unsigned long clkrate, u32 n
 	if (sdrcrate < MIN_SDRC_DLL_LOCK_FREQ)
 		unlock_dll = 1;
 
-	mpurate = clk_get_rate(arm_fck) / CYCLES_PER_MHZ;
-	c = (mpurate << SDRC_MPURATE_SCALE) >> SDRC_MPURATE_BASE_SHIFT;
-	c += 1;  /* for safety */
-	c *= SDRC_MPURATE_LOOPS;
-	c >>= SDRC_MPURATE_SCALE;
-	if (c == 0)
-		c = 1;
+	c = sdrc_mpu_loops(clk_get_rate(arm_fck) / CYCLES_PER_MHZ);
 
 	/* VDD2 up before a faster clock, down after a slower one */
 	vdd2 = voltdm_lookup("core");
@@ -171,9 +176,15 @@ static unsigned long l3_switches;
  * DM3730 erratum 1.85 workaround 2, as Nokia's kernel (resource34xx.c, program_vdd2_opp_dll_wa(),
  * called from omap_sram_idle() with DPLL3 set to automatic around CORE retention and OFF): DPLL3 may
  * stop only with L3 at OPP50 and VDD2 at OPP100's voltage. Outside idle it stays locked (workaround
- * 1, policy init). Called with interrupts off: register accesses and the voltage processor only.
- * ponytail: with L3 at OPP100 (some user holds it) CORE stays ON for that idle instead of L3 being
- * lowered there as Nokia's did; every hold but the CPU's keeps CORE out of retention anyway.
+ * 1, policy init). Called with interrupts off: register accesses, the voltage processor and the SRAM
+ * routine only.
+ *
+ * With L3 at OPP100 (a hold), Nokia's lowered DPLL3's M2 to OPP50's rate right there (VDD2 stays at
+ * OPP100's voltage) and raised it again after the wakeup (reprogram_vdd2_opp_dll_wa()): so the
+ * display's hold, the CPU's and their lowering delay cost no CORE retention. Not while the SGX
+ * (CORE-derived clock), the ISP or USB hold L3, nor while the display's or the DSP's functional clock
+ * runs (their L3 traffic): CORE stays ON for that idle. Only for retention: omap_sram_idle() saves the
+ * CM registers for OFF after this, and the ROM relocks DPLL3 from the scratchpad (L3 at OPP100).
  */
 #define CM_CLKSEL1_PLL_CORE_M2_SHIFT	27
 #define CM_CLKSEL1_PLL_CORE_M2_MASK	(0x1f << CM_CLKSEL1_PLL_CORE_M2_SHIFT)
@@ -181,24 +192,60 @@ static unsigned long l3_switches;
 
 static struct voltagedomain *wa_vdd2;
 static u32 wa_m2_low;			/* CM_CLKSEL1_PLL's M2 at L3 OPP50; 0 until the policy runs */
+static struct omap_sdrc_params *wa_sdrc[2][2];	/* [OPP100, OPP50][CS0, CS1] */
+static u32 wa_loops;			/* sdrc_mpu_loops() at the fastest MPU rate */
+static bool wa_lowered;			/* this idle runs at OPP50's rate, the clock framework's is OPP100 */
+static unsigned long l3_idle_lowered;	/* debugfs omap3_l3 */
 
-bool omap3_l3_idle_enter(void)
+static u32 wa_m2(void)
 {
-	u32 m2 = (omap2_cm_read_mod_reg(PLL_MOD, CM_CLKSEL1) & CM_CLKSEL1_PLL_CORE_M2_MASK) >>
-		 CM_CLKSEL1_PLL_CORE_M2_SHIFT;
+	return (omap2_cm_read_mod_reg(PLL_MOD, CM_CLKSEL1) & CM_CLKSEL1_PLL_CORE_M2_MASK) >>
+	       CM_CLKSEL1_PLL_CORE_M2_SHIFT;
+}
 
-	if (!wa_m2_low || m2 != wa_m2_low)
-		return false;
-	if (voltdm_scale_noirq(wa_vdd2, VDD2_OPP100_UV))
-		return false;
+static void wa_switch(int low)
+{
+	struct omap_sdrc_params *cs0 = wa_sdrc[low][0], *cs1 = wa_sdrc[low][1];
+
+	omap3_configure_core_dpll(low ? wa_m2_low : wa_m2_low / 2, 0, wa_loops, !low,
+				  cs0->rfr_ctrl, cs0->actim_ctrla, cs0->actim_ctrlb, cs0->mr,
+				  cs1 ? cs1->rfr_ctrl : 0, cs1 ? cs1->actim_ctrla : 0,
+				  cs1 ? cs1->actim_ctrlb : 0, cs1 ? cs1->mr : 0);
+}
+
+/* the deepest CORE state this idle may enter: OFF, RET (L3 lowered for it) or ON */
+int omap3_l3_idle_enter(void)
+{
+	u32 m2 = wa_m2();
+
+	if (!wa_m2_low)
+		return PWRDM_POWER_ON;
+	if (m2 != wa_m2_low) {
+		if (m2 != wa_m2_low / 2 || !wa_sdrc[1][0] || l3_forced == 2 || l3_holds[OMAP3_L3_SGX] ||
+		    l3_holds[OMAP3_L3_ISP] || l3_holds[OMAP3_L3_USB] ||
+		    omap2_cm_read_mod_reg(OMAP3430_DSS_MOD, CM_FCLKEN) ||
+		    omap2_cm_read_mod_reg(OMAP3430_IVA2_MOD, CM_FCLKEN))
+			return PWRDM_POWER_ON;
+		wa_switch(1);
+		wa_lowered = true;
+		l3_idle_lowered++;
+	} else if (voltdm_scale_noirq(wa_vdd2, VDD2_OPP100_UV)) {
+		return PWRDM_POWER_ON;
+	}
 	omap2_cm_rmw_mod_reg_bits(CM_AUTOIDLE_PLL_AUTO_CORE_MASK, 1, PLL_MOD, CM_AUTOIDLE);
-	return true;
+	return wa_lowered ? PWRDM_POWER_RET : PWRDM_POWER_OFF;
 }
 
 void omap3_l3_idle_exit(void)
 {
 	omap2_cm_rmw_mod_reg_bits(CM_AUTOIDLE_PLL_AUTO_CORE_MASK, 0, PLL_MOD, CM_AUTOIDLE);
-	voltdm_scale_noirq(wa_vdd2, VDD2_OPP50_UV);
+	if (!wa_lowered) {
+		voltdm_scale_noirq(wa_vdd2, VDD2_OPP50_UV);
+		return;
+	}
+	wa_lowered = false;
+	if (wa_m2() == wa_m2_low)
+		wa_switch(0);
 }
 
 static void l3_account(void)
@@ -303,10 +350,10 @@ static int l3_show(struct seq_file *m, void *v)
 
 	mutex_lock(&l3_lock);
 	l3_account();
-	seq_printf(m, "%s, %s; OPP50 %llu s, OPP100 %llu s, %lu switches; holds",
+	seq_printf(m, "%s, %s; OPP50 %llu s, OPP100 %llu s, %lu switches, %lu lowered in idle; holds",
 		   clk_get_rate(l3_m2) == l3_low ? "OPP50" : "OPP100",
 		   (const char *[]){ "auto", "low", "high" }[l3_forced],
-		   div_u64(l3_ms[1], 1000), div_u64(l3_ms[0], 1000), l3_switches);
+		   div_u64(l3_ms[1], 1000), div_u64(l3_ms[0], 1000), l3_switches, l3_idle_lowered);
 	for (i = 0; i < OMAP3_L3_USERS; i++)
 		seq_printf(m, " %s%s %d", test_bit(i, &l3_ignored) ? "-" : "", l3_names[i], l3_holds[i]);
 	seq_putc(m, '\n');
@@ -358,7 +405,8 @@ static int __init omap3_l3_policy_init(void)
 {
 	struct cpufreq_policy *policy;
 	struct voltagedomain *vdd2;
-	struct clk *m2, *dpll3;
+	struct clk *m2, *dpll3, *sdrc_ick;
+	unsigned long sdrc;
 
 	/* SDRAM timings for both rates come from the board (sdram-nokia.c for the N9 and N950) */
 	if (!of_machine_is_compatible("nokia,omap3-n9") && !of_machine_is_compatible("nokia,omap3-n950"))
@@ -389,9 +437,18 @@ static int __init omap3_l3_policy_init(void)
 	/* L3 is at OPP100 now: OPP50's M2 is twice this one (l3_low) */
 	wa_vdd2 = vdd2;
 	if (vdd2)
-		wa_m2_low = 2 * ((omap2_cm_read_mod_reg(PLL_MOD, CM_CLKSEL1) &
-				  CM_CLKSEL1_PLL_CORE_M2_MASK) >> CM_CLKSEL1_PLL_CORE_M2_SHIFT);
+		wa_m2_low = 2 * wa_m2();
+	/* the idle path's switch: both rates' SDRC timings (the DLL stays locked at OPP50's) */
+	sdrc_ick = clk_get(NULL, "sdrc_ick");
+	sdrc = IS_ERR(sdrc_ick) ? 0 : clk_get_rate(sdrc_ick);
+	if (!IS_ERR(sdrc_ick))
+		clk_put(sdrc_ick);
+	if (sdrc / 2 < MIN_SDRC_DLL_LOCK_FREQ ||
+	    omap2_sdrc_get_params(sdrc, &wa_sdrc[0][0], &wa_sdrc[0][1]) ||
+	    omap2_sdrc_get_params(sdrc / 2, &wa_sdrc[1][0], &wa_sdrc[1][1]))
+		wa_sdrc[1][0] = NULL;
 	policy = cpufreq_cpu_get(0);
+	wa_loops = sdrc_mpu_loops((policy ? policy->cpuinfo.max_freq : 1200000) / 1000);
 	l3_cpu_high = !policy || policy->cur > policy->min;
 	if (policy)
 		cpufreq_cpu_put(policy);
