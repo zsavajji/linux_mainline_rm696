@@ -13,7 +13,6 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/pm_runtime.h>
-#include <linux/clk/ti.h>
 #include <linux/pm_wakeirq.h>
 
 #include "wlcore.h"
@@ -6711,11 +6710,11 @@ static int __maybe_unused wlcore_runtime_suspend(struct device *dev)
 
 	/* We do not enter elp sleep in PLT mode */
 	if (wl->plt)
-		goto out;
+		return 0;
 
 	/* Nothing to do if no ELP mode requested */
 	if (wl->sleep_auth != WL1271_PSM_ELP)
-		goto out;
+		return 0;
 
 	wl12xx_for_each_wlvif(wl, wlvif) {
 		if (!test_bit(WLVIF_FLAG_IN_PS, &wlvif->flags) &&
@@ -6732,15 +6731,10 @@ static int __maybe_unused wlcore_runtime_suspend(struct device *dev)
 	}
 
 	set_bit(WL1271_FLAG_IN_ELP, &wl->flags);
-out:
-	omap3_l3_release(OMAP3_L3_WLAN);
+
 	return 0;
 }
 
-/*
- * OMAP3 L3 at OPP100 while the chip is awake (out of ELP: traffic, or no power save), as Nokia's N9
- * kernel asked for 780800 KiB/s in WL12XX_PERF_HIGH_THROUGHPUT (associated, out of power save)
- */
 static int __maybe_unused wlcore_runtime_resume(struct device *dev)
 {
 	struct wl1271 *wl = dev_get_drvdata(dev);
@@ -6750,7 +6744,6 @@ static int __maybe_unused wlcore_runtime_resume(struct device *dev)
 	unsigned long start_time = jiffies;
 	bool recovery = false;
 
-	omap3_l3_hold(OMAP3_L3_WLAN);
 	/* Nothing to do if no ELP mode requested */
 	if (!test_bit(WL1271_FLAG_IN_ELP, &wl->flags))
 		return 0;
