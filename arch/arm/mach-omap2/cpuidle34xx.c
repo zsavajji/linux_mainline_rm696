@@ -23,6 +23,7 @@
 #include <linux/cpuidle.h>
 #include <linux/export.h>
 #include <linux/cpu_pm.h>
+#include <linux/of.h>
 #include <asm/cpuidle.h>
 
 #include "powerdomain.h"
@@ -438,6 +439,25 @@ static struct cpuidle_driver omap3430_idle_driver = {
 	.safe_state_index = 0,
 };
 
+/*
+ * The N9's C-states as Nokia measured them (board-rm696.c rm696_cpuidle_params: sleep plus wake
+ * latency, then the residency threshold). The generic table above says C5 exits in 10 ms, which the
+ * display's 6 ms limit refuses, where Nokia measured 5.6 ms and let C5 run with the screen on; and it
+ * lets the governor take MPU retention from 300 us of idle, where Nokia's 252 us of entry and exit
+ * asked for 29 ms. C7 takes stock's C8: OFF with the secure RAM save, which ours always does.
+ */
+static const struct {
+	unsigned int exit_latency, target_residency;
+} omap3_n9_idle_params[ARRAY_SIZE(omap3_idle_data)] = {
+	{ 60 + 42, 101 },
+	{ 87 + 59, 183 },
+	{ 185 + 67, 29177 },
+	{ 1928 + 381, 42648 },
+	{ 4624 + 987, 56119 },
+	{ 6391 + 1294, 77616 },
+	{ 14643 + 7615, 158105 },
+};
+
 /* Public functions */
 
 /**
@@ -460,6 +480,13 @@ int __init omap3_idle_init(void)
 
 	for (i = 0; i < ARRAY_SIZE(core_off_pds); i++)
 		core_off_pds[i] = pwrdm_lookup(core_off_pd_names[i]);
+
+	if (of_machine_is_compatible("nokia,omap3-n9"))
+		for (i = 0; i < ARRAY_SIZE(omap3_n9_idle_params); i++) {
+			omap3_idle_driver.states[i].exit_latency = omap3_n9_idle_params[i].exit_latency;
+			omap3_idle_driver.states[i].target_residency =
+				omap3_n9_idle_params[i].target_residency;
+		}
 
 	if (cpu_is_omap3430())
 		return cpuidle_register(&omap3430_idle_driver, NULL);
