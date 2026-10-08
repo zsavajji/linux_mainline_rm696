@@ -1227,13 +1227,6 @@ static inline int dsi_if_enable(struct platform_device *dsidev, bool enable)
 	return 0;
 }
 
-static unsigned long dsi_get_pll_hsdiv_dispc_rate(struct platform_device *dsidev)
-{
-	struct dsi_data *dsi = dsi_get_dsidrv_data(dsidev);
-
-	return dsi->pll.cinfo.clkout[HSDIV_DISPC];
-}
-
 static unsigned long dsi_get_pll_hsdiv_dsi_rate(struct platform_device *dsidev)
 {
 	struct dsi_data *dsi = dsi_get_dsidrv_data(dsidev);
@@ -4104,7 +4097,8 @@ static int dsi_configure_dispc_clocks(struct platform_device *dsidev)
 	int r;
 	unsigned long fck;
 
-	fck = dsi_get_pll_hsdiv_dispc_rate(dsidev);
+	/* the DSS functional clock: see dsi_display_init_dispc() */
+	fck = dss_get_dispc_clk_rate();
 
 	dispc_cinfo.lck_div = dsi->user_dispc_cinfo.lck_div;
 	dispc_cinfo.pck_div = dsi->user_dispc_cinfo.pck_div;
@@ -4116,6 +4110,7 @@ static int dsi_configure_dispc_clocks(struct platform_device *dsidev)
 	}
 
 	dsi->mgr_config.clock_info = dispc_cinfo;
+	dsi->timings.pixelclock = dispc_cinfo.pck;
 
 	return 0;
 }
@@ -4126,9 +4121,14 @@ static int dsi_display_init_dispc(struct platform_device *dsidev,
 	struct dsi_data *dsi = dsi_get_dsidrv_data(dsidev);
 	int r;
 
-	dss_select_lcd_clk_source(mgr->id, dsi->module_id == 0 ?
-			OMAP_DSS_CLK_SRC_DSI_PLL_HSDIV_DISPC :
-			OMAP_DSS_CLK_SRC_DSI2_PLL_HSDIV_DISPC);
+	/*
+	 * The DISPC on the DSS functional clock (DSS1_ALWON_FCLK), as Nokia's N9 kernel
+	 * (board-rm696-video.c: dispc.fclk_from_dsi_pll = false; 172.8 MHz core, 43.2 MHz pixel clock
+	 * with this command-mode panel's dividers), not on the DSI PLL: the panel's ULPS powers that
+	 * PLL off 500 ms after an update, and a TV-out (VENC) running on the same DISPC lost its clock
+	 * and sync at every ULPS (SYNC_LOST on channel tv at each ULPS exit).
+	 */
+	dss_select_lcd_clk_source(mgr->id, OMAP_DSS_CLK_SRC_FCK);
 
 	if (dsi->mode == OMAP_DSS_DSI_CMD_MODE) {
 		r = dss_mgr_register_framedone_handler(mgr,
