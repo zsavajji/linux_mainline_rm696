@@ -1434,10 +1434,12 @@ static void dsicm_split_half(struct panel_drv_data *ddata, bool first, u16 *x, u
 	}
 }
 
+/* ends the update once: the bus lock goes back exactly once, whoever gives up first */
 static void dsicm_split_fail(struct panel_drv_data *ddata)
 {
+	if (atomic_xchg(&ddata->split_state, DSICM_SPLIT_NONE) == DSICM_SPLIT_NONE)
+		return;
 	dev_err(&ddata->pdev->dev, "split update failed\n");
-	atomic_set(&ddata->split_state, DSICM_SPLIT_NONE);
 	cancel_delayed_work(&ddata->te_timeout_work);
 	ddata->in->ops.dsi->latch_region(ddata->in, DSS_REGION_RELEASE);
 	ddata->in->ops.dsi->bus_unlock(ddata->in);
@@ -1651,11 +1653,25 @@ static void dsicm_te_timeout_work_callback(struct work_struct *work)
 	struct panel_drv_data *ddata = container_of(work, struct panel_drv_data,
 					te_timeout_work.work);
 	struct omap_dss_device *in = ddata->in;
+	int s = atomic_read(&ddata->split_state);
+
+	/*
+	 * A half on the link ends through its framedone or the DSI's own timeout (dsicm_split_fail()):
+	 * unlocking here too gave the bus lock back twice, two updates ran at once and the second
+	 * armed the DSI's framedone timeout while it was pending (BUG_ON in dsi_update_screen_dispc).
+	 * A half the TE ISR starts meanwhile is the ISR's. Either way, look again later: the next half
+	 * may still miss its TE (the update's end cancels this).
+	 */
+	if (s == DSICM_HALF1_ONGOING || s == DSICM_HALF2_ONGOING ||
+	    (s != DSICM_SPLIT_NONE && atomic_cmpxchg(&ddata->split_state, s, DSICM_SPLIT_NONE) != s)) {
+		schedule_delayed_work(&ddata->te_timeout_work, msecs_to_jiffies(250));
+		return;
+	}
 
 	dev_err(&ddata->pdev->dev, "TE not received for 250ms!\n");
 
 	atomic_set(&ddata->do_update, 0);
-	if (atomic_xchg(&ddata->split_state, DSICM_SPLIT_NONE) != DSICM_SPLIT_NONE)
+	if (s != DSICM_SPLIT_NONE)
 		in->ops.dsi->latch_region(in, DSS_REGION_RELEASE);
 	in->ops.dsi->bus_unlock(in);
 }
