@@ -18,6 +18,7 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/spinlock.h>
+#include <linux/sched/clock.h>
 #include <trace/events/power.h>
 
 #include "cm2xxx_3xxx.h"
@@ -139,6 +140,15 @@ skip_voltdm:
 	return 0;
 }
 
+/*
+ * The time pm_debug's state timers use: read once per transition and passed down, not once per
+ * power domain (the 32 kHz counter sits behind the wakeup L4, ~0.6 us a read on OMAP3)
+ */
+static inline s64 pwrdm_now(void)
+{
+	return IS_ENABLED(CONFIG_PM_DEBUG) ? sched_clock() : 0;
+}
+
 static void _update_logic_membank_counters(struct powerdomain *pwrdm)
 {
 	int i;
@@ -158,7 +168,7 @@ static void _update_logic_membank_counters(struct powerdomain *pwrdm)
 	}
 }
 
-static int _pwrdm_state_switch(struct powerdomain *pwrdm, int flag)
+static int _pwrdm_state_switch(struct powerdomain *pwrdm, int flag, s64 now)
 {
 
 	int prev, next, state, trace_state = 0;
@@ -199,23 +209,23 @@ static int _pwrdm_state_switch(struct powerdomain *pwrdm, int flag)
 	if (state != prev)
 		pwrdm->state_counter[state]++;
 
-	pm_dbg_update_time(pwrdm, prev);
+	pm_dbg_update_time(pwrdm, prev, now);
 
 	pwrdm->state = state;
 
 	return 0;
 }
 
-static int _pwrdm_pre_transition_cb(struct powerdomain *pwrdm, void *unused)
+static int _pwrdm_pre_transition_cb(struct powerdomain *pwrdm, void *now)
 {
 	pwrdm_clear_all_prev_pwrst(pwrdm);
-	_pwrdm_state_switch(pwrdm, PWRDM_STATE_NOW);
+	_pwrdm_state_switch(pwrdm, PWRDM_STATE_NOW, *(s64 *)now);
 	return 0;
 }
 
-static int _pwrdm_post_transition_cb(struct powerdomain *pwrdm, void *unused)
+static int _pwrdm_post_transition_cb(struct powerdomain *pwrdm, void *now)
 {
-	_pwrdm_state_switch(pwrdm, PWRDM_STATE_PREV);
+	_pwrdm_state_switch(pwrdm, PWRDM_STATE_PREV, *(s64 *)now);
 	return 0;
 }
 
@@ -980,7 +990,7 @@ int pwrdm_state_switch_nolock(struct powerdomain *pwrdm)
 
 	ret = arch_pwrdm->pwrdm_wait_transition(pwrdm);
 	if (!ret)
-		ret = _pwrdm_state_switch(pwrdm, PWRDM_STATE_NOW);
+		ret = _pwrdm_state_switch(pwrdm, PWRDM_STATE_NOW, pwrdm_now());
 
 	return ret;
 }
@@ -998,22 +1008,43 @@ int __deprecated pwrdm_state_switch(struct powerdomain *pwrdm)
 
 int pwrdm_pre_transition(struct powerdomain *pwrdm)
 {
+	s64 now = pwrdm_now();
+
 	if (pwrdm)
-		_pwrdm_pre_transition_cb(pwrdm, NULL);
+		_pwrdm_pre_transition_cb(pwrdm, &now);
 	else
-		pwrdm_for_each(_pwrdm_pre_transition_cb, NULL);
+		pwrdm_for_each(_pwrdm_pre_transition_cb, &now);
 
 	return 0;
 }
 
 int pwrdm_post_transition(struct powerdomain *pwrdm)
 {
+	s64 now = pwrdm_now();
+
 	if (pwrdm)
-		_pwrdm_post_transition_cb(pwrdm, NULL);
+		_pwrdm_post_transition_cb(pwrdm, &now);
 	else
-		pwrdm_for_each(_pwrdm_post_transition_cb, NULL);
+		pwrdm_for_each(_pwrdm_post_transition_cb, &now);
 
 	return 0;
+}
+
+/* The same for a given set of power domains, with one time read for all of them */
+void pwrdm_pre_transition_set(struct powerdomain * const *pwrdms, unsigned int n)
+{
+	s64 now = pwrdm_now();
+
+	while (n--)
+		_pwrdm_pre_transition_cb(*pwrdms++, &now);
+}
+
+void pwrdm_post_transition_set(struct powerdomain * const *pwrdms, unsigned int n)
+{
+	s64 now = pwrdm_now();
+
+	while (n--)
+		_pwrdm_post_transition_cb(*pwrdms++, &now);
 }
 
 /**

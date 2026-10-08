@@ -241,6 +241,8 @@ int pwrdm_state_switch_nolock(struct powerdomain *pwrdm);
 int pwrdm_state_switch(struct powerdomain *pwrdm);
 int pwrdm_pre_transition(struct powerdomain *pwrdm);
 int pwrdm_post_transition(struct powerdomain *pwrdm);
+void pwrdm_pre_transition_set(struct powerdomain * const *pwrdms, unsigned int n);
+void pwrdm_post_transition_set(struct powerdomain * const *pwrdms, unsigned int n);
 
 extern int omap_set_pwrdm_state(struct powerdomain *pwrdm, u8 state);
 

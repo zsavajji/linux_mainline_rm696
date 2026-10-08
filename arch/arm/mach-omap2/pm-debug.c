@@ -50,19 +50,16 @@ static const char pwrdm_state_names[][PWRDM_MAX_PWRSTS] = {
 	"ON"
 };
 
-void pm_dbg_update_time(struct powerdomain *pwrdm, int prev)
+/* @now: the caller's one sched_clock() read for the whole transition */
+void pm_dbg_update_time(struct powerdomain *pwrdm, int prev, s64 now)
 {
-	s64 t;
-
 	if (!pm_dbg_init_done)
 		return ;
 
 	/* Update timer for previous state */
-	t = sched_clock();
+	pwrdm->state_timer[prev] += now - pwrdm->timer;
 
-	pwrdm->state_timer[prev] += t - pwrdm->timer;
-
-	pwrdm->timer = t;
+	pwrdm->timer = now;
 }
 
 static int clkdm_dbg_show_counter(struct clockdomain *clkdm, void *user)
@@ -209,6 +206,13 @@ static u32 sleep_while_idle = 1, voltage_off_while_idle = 1;
  */
 static u32 off_mode_requested, off_mode_armed = 1;
 
+/*
+ * 1: every idle entry walks every power domain for count and time (mainline's way: ~100 us of PRM and
+ * 32 kHz counter reads per idle on OMAP3, C1 included). 0: as Nokia's N9 kernel, mpu, neon, core and
+ * per when the MPU sleeps, every domain when CORE does (pm34xx.c omap_sram_idle())
+ */
+u32 pm_dbg_count_all;
+
 static int option_get(void *data, u64 *val)
 {
 	u32 *option = data;
@@ -224,7 +228,8 @@ static int option_set(void *data, u64 val)
 
 	*option = val;
 
-	if (option == &sleep_while_idle || option == &voltage_off_while_idle)
+	if (option == &sleep_while_idle || option == &voltage_off_while_idle ||
+	    option == &pm_dbg_count_all)
 		return 0;
 
 	if (option == &enable_off_mode)
@@ -264,6 +269,8 @@ static int __init pm_dbg_init(void)
 		off_mode_armed = 0;
 	debugfs_create_file("off_mode_armed", S_IRUGO | S_IWUSR, d,
 			    &off_mode_armed, &pm_dbg_option_fops);
+	debugfs_create_file("count_all_domains", S_IRUGO | S_IWUSR, d,
+			    &pm_dbg_count_all, &pm_dbg_option_fops);
 	debugfs_create_u32("secure_ram_saves", 0444, d, &omap3_secure_ram_saves);
 	debugfs_create_u32("secure_ram_save_fails", 0444, d, &omap3_secure_ram_save_fails);
 	debugfs_create_u32("secure_ram_save_positive", 0444, d, &omap3_secure_ram_save_positive);

@@ -320,6 +320,8 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	u32 sdrc_pwr = 0;
 	bool core_off_refused = false, per_off_refused = false, per_wkdep = false;
 	int error;
+	struct powerdomain *idle_pwrdms[] = { mpu_pwrdm, neon_pwrdm, core_pwrdm, per_pwrdm };
+	enum { WALK_NONE, WALK_IDLE, WALK_ALL } walk = WALK_NONE;
 
 	mpu_next_state = pwrdm_read_next_pwrst(mpu_pwrdm);
 	/*
@@ -375,7 +377,21 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		}
 	}
 
-	pwrdm_pre_transition(NULL);
+	/*
+	 * Count and time the transitions as Nokia's N9 kernel did (pm34xx.c): mpu, neon, core and per
+	 * when the MPU sleeps, nothing while it stays ON (C1, C2). Mainline walked every power domain at
+	 * every idle entry, C1 included: ~100 us of PRM and 32 kHz counter reads over the 19.2 MHz wakeup
+	 * L4 per idle (N9 boot 280: 40 us before WFI, 59 after). Every domain when CORE sleeps (standby,
+	 * where the device domains' counts matter), or always with pm_debug/count_all_domains
+	 */
+	if (pm_dbg_count_all || core_next_state < PWRDM_POWER_ON)
+		walk = WALK_ALL;
+	else if (mpu_next_state < PWRDM_POWER_ON)
+		walk = WALK_IDLE;
+	if (walk == WALK_ALL)
+		pwrdm_pre_transition(NULL);
+	else if (walk == WALK_IDLE)
+		pwrdm_pre_transition_set(idle_pwrdms, ARRAY_SIZE(idle_pwrdms));
 
 	/* PER */
 	if (per_next_state == PWRDM_POWER_OFF) {
@@ -480,7 +496,10 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	if (per_wkdep)
 		omap2_prm_clear_mod_reg_bits(OMAP_EN_WKUP_MASK, OMAP3430_PER_MOD, PM_WKDEP);
 
-	pwrdm_post_transition(NULL);
+	if (walk == WALK_ALL)
+		pwrdm_post_transition(NULL);
+	else if (walk == WALK_IDLE)
+		pwrdm_post_transition_set(idle_pwrdms, ARRAY_SIZE(idle_pwrdms));
 
 	/* PER */
 	if (per_next_state == PWRDM_POWER_OFF) {
