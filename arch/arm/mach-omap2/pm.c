@@ -15,6 +15,7 @@
 #include <linux/suspend.h>
 #include <linux/clk.h>
 #include <linux/cpu.h>
+#include <linux/of.h>
 
 #include <asm/system_misc.h>
 
@@ -63,6 +64,14 @@ void omap_pm_get_oscillator(u32 *tstart, u32 *tshut)
 
 	*tstart = oscillator.startup_time;
 	*tshut = oscillator.shutdown_time;
+
+	/*
+	 * Nokia's N9/N950 board files: CLKSETUP 113 cycles of 32 kHz (3 ms oscillator,
+	 * 200 us regulator, 250 us margin), so VOLTSETUP2 97
+	 */
+	if (of_machine_is_compatible("nokia,omap3-n9") ||
+	    of_machine_is_compatible("nokia,omap3-n950"))
+		*tstart = 3448;
 }
 #endif
 
