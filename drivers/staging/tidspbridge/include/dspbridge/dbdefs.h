@@ -298,8 +298,11 @@ struct dsp_ndbprops {
 	u32 count_profiles;	/* Number of supported profiles */
 	/* Array of profiles */
 	struct dsp_nodeprofs node_profiles[MAX_PROFILES];
-	u32 stack_seg_name;	/* Stack Segment Name */
+	u32 stack_seg_name;	/* Stack Segment Name: STACKSEGLABEL or 0 */
 };
+
+/* The DSP stack segment a node may ask for; node_allocate() then places its stack in L1DSRAM */
+#define STACKSEGLABEL "L1DSRAM_HEAP"
 
 	/* The dsp_nodeattrin structure describes the attributes of a
 	 * node client */

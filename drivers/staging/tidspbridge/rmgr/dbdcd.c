@@ -1228,10 +1228,13 @@ static int get_attrs_from_buf(char *psz_buf, u32 ul_buf_size,
 			}
 		}
 		token = strsep(&psz_cur, seps);
-		if (token) {
-			gen_obj->obj_data.node_obj.ndb_props.stack_seg_name =
-			    (u32) (token);
-		}
+		/*
+		 * psz_buf is freed by the caller and node_allocate() only compares the name with
+		 * STACKSEGLABEL: point at that constant, never into the buffer (a use-after-free
+		 * read in node_allocate(), found with KASAN).
+		 */
+		gen_obj->obj_data.node_obj.ndb_props.stack_seg_name =
+		    token && !strcmp(token, STACKSEGLABEL) ? (u32)STACKSEGLABEL : 0;
 
 		break;
 

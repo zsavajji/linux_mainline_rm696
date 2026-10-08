@@ -115,7 +115,6 @@
 
 #define PWR_TIMEOUT		500	/* default PWR timeout in msec */
 
-#define STACKSEGLABEL "L1DSRAM_HEAP"	/* Label for DSP Stack Segment Addr */
 
 /*
  *  ======== node_mgr ========
