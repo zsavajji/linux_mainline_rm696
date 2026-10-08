@@ -182,8 +182,8 @@ static unsigned long l3_switches;
  * With L3 at OPP100 (a hold), Nokia's lowered DPLL3's M2 to OPP50's rate right there (VDD2 stays at
  * OPP100's voltage) and raised it again after the wakeup (reprogram_vdd2_opp_dll_wa()): so the
  * display's hold, the CPU's and their lowering delay cost no CORE retention. Not while the SGX
- * (CORE-derived clock), the ISP or USB hold L3, nor while the display's or the DSP's functional clock
- * runs (their L3 traffic): CORE stays ON for that idle. Only for retention: omap_sram_idle() saves the
+ * (CORE-derived clock), the ISP or USB hold L3, nor while the display fetches a frame or the DSP's
+ * functional clock runs (their L3 traffic): CORE stays ON for that idle. Only for retention: omap_sram_idle() saves the
  * CM registers for OFF after this, and the ROM relocks DPLL3 from the scratchpad (L3 at OPP100).
  */
 #define CM_CLKSEL1_PLL_CORE_M2_SHIFT	27
@@ -201,6 +201,26 @@ static u32 wa_m2(void)
 {
 	return (omap2_cm_read_mod_reg(PLL_MOD, CM_CLKSEL1) & CM_CLKSEL1_PLL_CORE_M2_MASK) >>
 	       CM_CLKSEL1_PLL_CORE_M2_SHIFT;
+}
+
+/*
+ * The display's DMA fetches a frame: DISPC's LCD or TV output enabled (with the manual-update panel,
+ * stall mode, the hardware clears LCDENABLE at the frame's end). Between updates the DSS stays clocked
+ * until the panel's ULPS (500 ms, as stock): idle then, no L3 traffic. Busy if unknown (functional
+ * clock on, interface clock off: DISPC can't be read)
+ */
+#define DISPC_CONTROL			0x48050440
+#define DISPC_CONTROL_LCD_DIGIT		0x3
+
+static void __iomem *wa_dispc_control;
+
+static bool wa_dss_busy(void)
+{
+	if (!omap2_cm_read_mod_reg(OMAP3430_DSS_MOD, CM_FCLKEN))
+		return false;
+	if (!wa_dispc_control || !(omap2_cm_read_mod_reg(OMAP3430_DSS_MOD, CM_ICLKEN) & 1))
+		return true;
+	return readl_relaxed(wa_dispc_control) & DISPC_CONTROL_LCD_DIGIT;
 }
 
 static void wa_switch(int low)
@@ -222,8 +242,7 @@ int omap3_l3_idle_enter(void)
 		return PWRDM_POWER_ON;
 	if (m2 != wa_m2_low) {
 		if (m2 != wa_m2_low / 2 || !wa_sdrc[1][0] || l3_forced == 2 || l3_holds[OMAP3_L3_SGX] ||
-		    l3_holds[OMAP3_L3_ISP] || l3_holds[OMAP3_L3_USB] ||
-		    omap2_cm_read_mod_reg(OMAP3430_DSS_MOD, CM_FCLKEN) ||
+		    l3_holds[OMAP3_L3_ISP] || l3_holds[OMAP3_L3_USB] || wa_dss_busy() ||
 		    omap2_cm_read_mod_reg(OMAP3430_IVA2_MOD, CM_FCLKEN))
 			return PWRDM_POWER_ON;
 		wa_switch(1);
@@ -447,6 +466,7 @@ static int __init omap3_l3_policy_init(void)
 	    omap2_sdrc_get_params(sdrc, &wa_sdrc[0][0], &wa_sdrc[0][1]) ||
 	    omap2_sdrc_get_params(sdrc / 2, &wa_sdrc[1][0], &wa_sdrc[1][1]))
 		wa_sdrc[1][0] = NULL;
+	wa_dispc_control = ioremap(DISPC_CONTROL, 4);
 	policy = cpufreq_cpu_get(0);
 	wa_loops = sdrc_mpu_loops((policy ? policy->cpuinfo.max_freq : 1200000) / 1000);
 	l3_cpu_high = !policy || policy->cur > policy->min;
