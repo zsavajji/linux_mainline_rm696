@@ -546,6 +546,10 @@ int pwrdm_set_next_pwrst(struct powerdomain *pwrdm, u8 pwrst)
 	if (!(pwrdm->pwrsts & (1 << pwrst)))
 		return -EINVAL;
 
+	/* Already programmed: PM_PWSTCTRL changes only here, and its read-modify-write is slow (PRM) */
+	if (pwrdm->next_pwrst_valid && pwrdm->next_pwrst == pwrst)
+		return 0;
+
 	pr_debug("powerdomain: %s: setting next powerstate to %0x\n",
 		 pwrdm->name, pwrst);
 
@@ -555,6 +559,10 @@ int pwrdm_set_next_pwrst(struct powerdomain *pwrdm, u8 pwrst)
 					  raw_smp_processor_id());
 		/* Program the pwrdm desired target state */
 		ret = arch_pwrdm->pwrdm_set_next_pwrst(pwrdm, pwrst);
+		if (!ret) {
+			pwrdm->next_pwrst = pwrst;
+			pwrdm->next_pwrst_valid = true;
+		}
 	}
 
 	return ret;
@@ -574,6 +582,10 @@ int pwrdm_read_next_pwrst(struct powerdomain *pwrdm)
 
 	if (!pwrdm)
 		return -EINVAL;
+
+	/* What pwrdm_set_next_pwrst() programmed, without a PRM read */
+	if (pwrdm->next_pwrst_valid)
+		return pwrdm->next_pwrst;
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_read_next_pwrst)
 		ret = arch_pwrdm->pwrdm_read_next_pwrst(pwrdm);

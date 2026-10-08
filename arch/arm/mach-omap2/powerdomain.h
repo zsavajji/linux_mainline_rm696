@@ -124,6 +124,9 @@ struct powerdomain {
 	struct list_head node;
 	struct list_head voltdm_node;
 	int state;
+	/* the last state programmed with pwrdm_set_next_pwrst(): PM_PWSTCTRL changes no other way */
+	u8 next_pwrst;
+	bool next_pwrst_valid;
 	unsigned state_counter[PWRDM_MAX_PWRSTS];
 	unsigned ret_logic_off_counter;
 	unsigned ret_mem_off_counter[PWRDM_MAX_MEM_BANKS];
