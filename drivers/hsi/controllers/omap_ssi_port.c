@@ -1352,6 +1352,15 @@ static int omap_ssi_port_runtime_resume(struct device *dev)
 
 	dev_dbg(dev, "port runtime resume!\n");
 
+	/*
+	 * After a context loss (MPU_ENABLE no longer as saved) the status reads data available on
+	 * every RX channel, a break and an error, with nothing received: acknowledge it as
+	 * ssi_flush() does, or restoring MPU_ENABLE delivers a word never sent and a spurious error
+	 */
+	if (omap_port->sys_mpu_enable &&
+	    readl(omap_ssi->sys + SSI_MPU_ENABLE_REG(port->num, 0)) != omap_port->sys_mpu_enable)
+		writel_relaxed(0xffffff00, omap_ssi->sys + SSI_MPU_STATUS_REG(port->num, 0));
+
 	if ((omap_ssi->get_loss) && (omap_port->loss_count ==
 				omap_ssi->get_loss(ssi->device.parent)))
 		goto mode; /* We always need to restore the mode & TX divisor */
