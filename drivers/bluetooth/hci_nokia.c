@@ -33,9 +33,10 @@
 #define NOKIA_ID_TI1271		0x31
 
 #define FIRMWARE_BCM2048	"nokia/bcmfw.bin"
-#define FIRMWARE_TI1271		"nokia/ti1273.bin"
-#define FIRMWARE_TI1271_LE	"nokia/ti1273_le.bin"
-#define FIRMWARE_TI1271_PRELE	"nokia/ti1273_prele.bin"
+/* where Harmattan keeps them, the names Nokia's hci_h4p asked for (its fw.c) */
+#define FIRMWARE_TI1271		"ti1273.bin"
+#define FIRMWARE_TI1271_LE	"ti1273_le.bin"
+#define FIRMWARE_TI1271_PRELE	"ti1273_prele.bin"
 
 /*
  * The TI1271 at 3.69 Mbaud after its firmware, the rate the firmware leaves it at and Nokia's
