@@ -1198,6 +1198,13 @@ static void musb_g_rx_work(struct work_struct *work)
 	u8 epnum;
 
 	pm_runtime_get_sync(musb->controller);
+	/*
+	 * As in the RX interrupt: a completion that passes the packet on (u_ether's netif_rx())
+	 * must not run softirqs here. They enable interrupts, and the next packet's RX interrupt
+	 * then found no request (being given back): the packet stayed in the FIFO, the request
+	 * requeued while the endpoint was busy was never started, and the OUT endpoint was dead
+	 */
+	local_bh_disable();
 	spin_lock_irqsave(&musb->lock, flags);
 	pending = musb->g_rx_pending;
 	musb->g_rx_pending = 0;
@@ -1205,6 +1212,7 @@ static void musb_g_rx_work(struct work_struct *work)
 		if (pending & BIT(epnum))
 			musb_g_rx(musb, epnum);
 	spin_unlock_irqrestore(&musb->lock, flags);
+	local_bh_enable();
 	pm_runtime_mark_last_busy(musb->controller);
 	pm_runtime_put_autosuspend(musb->controller);
 }
