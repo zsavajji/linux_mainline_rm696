@@ -959,8 +959,8 @@ static int apply_pcreds(int flags, const struct policy_creds *pcreds,
 		SECURE_NOT_INHERITABLE;
 	int action;
 
-	/* Handle the securebits */
-	new->securebits |= SECURE_AEGIS_BITS | SECURE_AEGIS_LOCKS;
+	/* Handle the securebits; open mode leaves SECURE_NOROOT off, so uid 0 keeps root's rule */
+	new->securebits |= open_mode ? SECURE_AEGIS_MASK : SECURE_AEGIS_BITS | SECURE_AEGIS_LOCKS;
 	if ((flags & CREDP_TYPE_INHERITABLE) == 0)
 		new->securebits &= ~issecure_mask(SECURE_AEGIS);
 
