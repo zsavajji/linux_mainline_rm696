@@ -97,6 +97,7 @@ struct watchdog_ops {
  */
 struct watchdog_device {
 	int id;
+	const char *devnode;	/* /dev name instead of watchdog<id> (NULL: the default) */
 	struct device *parent;
 	const struct attribute_group **groups;
 	const struct watchdog_info *info;

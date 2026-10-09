@@ -1004,9 +1004,18 @@ static struct miscdevice watchdog_miscdev = {
 	.fops		= &watchdog_fops,
 };
 
+/* A driver's own /dev name, for userspace that opens a legacy driver's node (wdd->devnode) */
+static char *watchdog_devnode(const struct device *dev, umode_t *mode)
+{
+	struct watchdog_device *wdd = dev_get_drvdata(dev);
+
+	return wdd->devnode ? kstrdup(wdd->devnode, GFP_KERNEL) : NULL;
+}
+
 static const struct class watchdog_class = {
 	.name =		"watchdog",
 	.dev_groups =	wdt_groups,
+	.devnode =	watchdog_devnode,
 };
 
 /*
