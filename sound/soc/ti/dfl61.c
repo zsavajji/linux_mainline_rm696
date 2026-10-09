@@ -26,12 +26,14 @@
 #include <linux/pm_qos.h>
 #include <linux/regulator/consumer.h>
 #include <linux/unaligned.h>
+#include <sound/dmaengine_pcm.h>
 #include <sound/jack.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 
 #include "../codecs/tlv320dac33.h"
 #include "../codecs/wl1273.h"
+#include "omap-mcbsp-priv.h"
 
 static struct gpio_desc *dfl61_ihf_gpio;
 static struct gpio_desc *dfl61_tvout_gpio;	/* TVOUT_EN: the AV jack in video mode when high */
@@ -1012,12 +1014,55 @@ static const struct snd_soc_ops dfl61_twl_ops = {
 	.hw_params = dfl61_twl_hw_params,
 };
 
+/*
+ * As Nokia's machine drivers: the McBSP in threshold mode (a DMA request per FIFO threshold, not
+ * per sample), and stock's sysfs paths, where Harmattan's PulseAudio pre-start sets the McBSP's
+ * FIFO thresholds and the link's pmdown_time: /sys/devices/platform/omap-mcbsp.<McBSP> and
+ * soc-audio.<card> (twl4030 0 on McBSP3, dac33 1 on McBSP2, wl1273 2 on McBSP4).
+ */
+static void dfl61_stock_exit(int mcbsp, int card)
+{
+	char name[16];
+
+	snprintf(name, sizeof(name), "omap-mcbsp.%d", mcbsp);
+	sysfs_remove_link(&platform_bus.kobj, name);
+	snprintf(name, sizeof(name), "soc-audio.%d", card);
+	sysfs_remove_link(&platform_bus.kobj, name);
+}
+
+static int dfl61_stock_init(struct snd_soc_pcm_runtime *rtd, int mcbsp, int card)
+{
+	struct snd_soc_dai *cpu = snd_soc_rtd_to_cpu(rtd, 0);
+	struct omap_mcbsp *m = snd_soc_dai_get_drvdata(cpu);
+	char name[16];
+	int ret;
+
+	m->dma_op_mode = MCBSP_DMA_MODE_THRESHOLD;
+
+	dfl61_stock_exit(mcbsp, card);	/* what a failed earlier bind left */
+	snprintf(name, sizeof(name), "omap-mcbsp.%d", mcbsp);
+	ret = sysfs_create_link(&platform_bus.kobj, &cpu->dev->kobj, name);
+	if (ret)
+		return ret;
+	snprintf(name, sizeof(name), "soc-audio.%d", card);
+	return sysfs_create_link(&platform_bus.kobj, &rtd->dev->kobj, name);
+}
+
+static void dfl61_twl_exit(struct snd_soc_pcm_runtime *rtd)
+{
+	dfl61_stock_exit(3, 0);
+}
+
 /* "dfl61-twl4030 Jack", with Nokia's report mask: Harmattan's policy (ohm's accessories plugin)
  * finds it by name and follows its switch events */
 static int dfl61_twl_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_card *card = rtd->card;
 	int ret;
+
+	ret = dfl61_stock_init(rtd, 3, 0);
+	if (ret)
+		return ret;
 
 	ret = snd_soc_card_jack_new(card, "Jack",
 				    SND_JACK_MECHANICAL | SND_JACK_AVOUT | SND_JACK_HEADSET,
@@ -1099,6 +1144,7 @@ static struct snd_soc_dai_link dfl61_twl_link = {
 	.name = "TWL4030",
 	.stream_name = "TWL4030",
 	.init = dfl61_twl_init,
+	.exit = dfl61_twl_exit,
 	.ops = &dfl61_twl_ops,
 	SND_SOC_DAILINK_REG(twl),
 };
@@ -1119,10 +1165,19 @@ static struct snd_soc_card dfl61_twl_card = {
 
 /* The DAC33 card */
 
+static void dfl61_dac33_exit(struct snd_soc_pcm_runtime *rtd)
+{
+	dfl61_stock_exit(2, 1);
+}
+
 static int dfl61_dac33_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_card *card = rtd->card;
 	int ret;
+
+	ret = dfl61_stock_init(rtd, 2, 1);
+	if (ret)
+		return ret;
 
 	/* The DAC33 runs from the 32 kHz sleep clock (its PLL makes the rest) */
 	ret = snd_soc_dai_set_sysclk(snd_soc_rtd_to_codec(rtd, 0), TLV320DAC33_SLEEPCLK, 32768,
@@ -1167,6 +1222,7 @@ static struct snd_soc_dai_link dfl61_dac33_link = {
 	.stream_name = "DAC33",
 	.dai_fmt = SND_SOC_DAIFMT_LEFT_J | SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBP_CFP,
 	.init = dfl61_dac33_init,
+	.exit = dfl61_dac33_exit,
 	SND_SOC_DAILINK_REG(dac33),
 };
 
@@ -1214,10 +1270,22 @@ static const struct snd_soc_ops dfl61_bt_ops = {
 	.startup = dfl61_bt_startup,
 };
 
+static int dfl61_bt_init(struct snd_soc_pcm_runtime *rtd)
+{
+	return dfl61_stock_init(rtd, 4, 2);
+}
+
+static void dfl61_bt_exit(struct snd_soc_pcm_runtime *rtd)
+{
+	dfl61_stock_exit(4, 2);
+}
+
 static struct snd_soc_dai_link dfl61_bt_link = {
 	.name = "BT/FM PCM",
 	.stream_name = "BT/FM Stream",
 	.dai_fmt = SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF | SND_SOC_DAIFMT_CBP_CFP,
+	.init = dfl61_bt_init,
+	.exit = dfl61_bt_exit,
 	.ops = &dfl61_bt_ops,
 	SND_SOC_DAILINK_REG(bt),
 };
