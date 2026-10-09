@@ -71,7 +71,6 @@ extern void omap_smccc_smc(u32 fn, u32 arg);
 extern void omap_smc1(u32 fn, u32 arg);
 extern u32 omap_smc2(u32 id, u32 falg, u32 pargs);
 extern u32 omap_smc3(u32 id, u32 process, u32 flag, u32 pargs);
-extern int omap_secure_ram_reserve_memblock(void);
 extern u32 save_secure_ram_context(u32 args_pa);
 extern u32 omap3_save_secure_ram(phys_addr_t save_pa, int size);
 

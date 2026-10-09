@@ -17,13 +17,10 @@
 #include <linux/of.h>
 
 #include <asm/cacheflush.h>
-#include <asm/memblock.h>
 
 #include "common.h"
 #include "omap-secure.h"
 #include "soc.h"
-
-static phys_addr_t omap_secure_memblock_base;
 
 bool optee_available;
 
@@ -105,17 +102,6 @@ void omap_smc1(u32 fn, u32 arg)
 		omap_smccc_smc(fn, arg);
 	else
 		_omap_smc1(fn, arg);
-}
-
-/* Allocate the memory to save secure ram */
-int __init omap_secure_ram_reserve_memblock(void)
-{
-	u32 size = OMAP_SECURE_RAM_STORAGE;
-
-	size = ALIGN(size, SECTION_SIZE);
-	omap_secure_memblock_base = arm_memblock_steal(size, SECTION_SIZE);
-
-	return 0;
 }
 
 #if defined(CONFIG_ARCH_OMAP3) && defined(CONFIG_PM)
