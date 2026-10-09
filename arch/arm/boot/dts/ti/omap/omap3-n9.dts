@@ -180,7 +180,8 @@
 
 /*
  * sgx: the kernel log kept in RAM across a warm reset (pstore/ramoops): with the test kernel armed
- * again, a panic's log survives into the next boot (ramboot/init copies it to MyDocs/.ramboot)
+ * again, a panic's log survives into the next boot (ramboot/init copies it to MyDocs/.ramboot).
+ * 512 KiB: the console's last 256 KiB and two 128 KiB panic/oops records
  */
 / {
 	reserved-memory {
@@ -190,7 +191,7 @@
 
 		ramoops@8f000000 {
 			compatible = "ramoops";
-			reg = <0x8f000000 0x100000>;
+			reg = <0x8f000000 0x80000>;
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 		};
