@@ -45,7 +45,8 @@ static int twl4030_wdt_set_timeout(struct watchdog_device *wdt,
 }
 
 static const struct watchdog_info twl4030_wdt_info = {
-	.options = WDIOF_SETTIMEOUT | WDIOF_MAGICCLOSE | WDIOF_KEEPALIVEPING,
+	/* No magic close: any close stops it, as Nokia's driver (DSME never closes it) */
+	.options = WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING,
 	.identity = "TWL4030 Watchdog",
 };
 
@@ -55,6 +56,23 @@ static const struct watchdog_ops twl4030_wdt_ops = {
 	.stop		= twl4030_wdt_stop,
 	.set_timeout	= twl4030_wdt_set_timeout,
 };
+
+/*
+ * At boot as Nokia's kernel (twl4030_wdt_hack.c): a watchdog NOLO left running is re-armed for 30 s
+ * and not kicked, so a boot that hangs before DSME opens it resets the phone. One that doesn't
+ * stop (a badly configured TWL5031) the core kicks until it's opened, as Nokia's work did.
+ */
+static void twl4030_wdt_boot(struct watchdog_device *wdt)
+{
+	u8 left;
+
+	if (twl_i2c_read_u8(TWL_MODULE_PM_RECEIVER, &left, TWL4030_WATCHDOG_CFG_REG_OFFS) || !left)
+		return;
+	twl4030_wdt_stop(wdt);
+	if (!twl_i2c_read_u8(TWL_MODULE_PM_RECEIVER, &left, TWL4030_WATCHDOG_CFG_REG_OFFS) && left)
+		set_bit(WDOG_HW_RUNNING, &wdt->status);
+	twl4030_wdt_write(wdt->max_timeout);
+}
 
 static int twl4030_wdt_probe(struct platform_device *pdev)
 {
@@ -72,11 +90,12 @@ static int twl4030_wdt_probe(struct platform_device *pdev)
 	wdt->min_timeout	= 1;
 	wdt->max_timeout	= 30;
 	wdt->parent = dev;
+	wdt->devnode		= "twl4030_wdt";	/* stock's node, which DSME opens */
 
 	watchdog_set_nowayout(wdt, nowayout);
 	platform_set_drvdata(pdev, wdt);
 
-	twl4030_wdt_stop(wdt);
+	twl4030_wdt_boot(wdt);
 
 	return devm_watchdog_register_device(dev, wdt);
 }

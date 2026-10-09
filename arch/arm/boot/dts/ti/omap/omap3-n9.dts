@@ -397,6 +397,8 @@
 		gpio3 = &gpio4;
 		gpio4 = &gpio5;
 		gpio5 = &gpio6;
+		watchdog0 = &wdt2;	/* /dev/watchdog: the OMAP one, as stock */
+		watchdog1 = &twl_wdt;	/* /dev/twl4030_wdt */
 	};
 };
 

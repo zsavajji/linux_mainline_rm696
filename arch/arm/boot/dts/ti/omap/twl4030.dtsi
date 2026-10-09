@@ -24,7 +24,7 @@
 		io-channel-names = "vac";
 	};
 
-	watchdog {
+	twl_wdt: watchdog {
 		compatible = "ti,twl4030-wdt";
 	};
 

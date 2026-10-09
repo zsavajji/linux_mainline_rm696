@@ -213,7 +213,8 @@ static unsigned int omap_wdt_get_timeleft(struct watchdog_device *wdog)
 }
 
 static const struct watchdog_info omap_wdt_info = {
-	.options = WDIOF_SETTIMEOUT | WDIOF_MAGICCLOSE | WDIOF_KEEPALIVEPING,
+	/* No magic close: any close stops it, as Nokia's driver (DSME never closes it) */
+	.options = WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING,
 	.identity = "OMAP Watchdog",
 };
 
@@ -299,11 +300,11 @@ static void omap_wdt_shutdown(struct platform_device *pdev)
 	struct omap_wdt_dev *wdev = platform_get_drvdata(pdev);
 
 	/*
-	 * NOWAYOUT: keep watching through a halt. On the test phone (no power-off, see omap3-n9.dts)
-	 * a power-off halts after device shutdown; the watchdogs are what reset it into stock
-	 * Harmattan. A reboot resets the SoC anyway.
+	 * Nowayout (the config, the parameter, or sysfs: the RAM-boot test init sets it): keep watching
+	 * through a halt. On the test phone a power-off halts (twl4030_power.poweroff_halt); the
+	 * watchdogs are what reset it into stock Harmattan. A reboot resets the SoC anyway.
 	 */
-	if (nowayout)
+	if (test_bit(WDOG_NO_WAY_OUT, &wdev->wdog.status))
 		return;
 
 	mutex_lock(&wdev->lock);
