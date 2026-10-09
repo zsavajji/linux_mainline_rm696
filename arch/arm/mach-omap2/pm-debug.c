@@ -201,8 +201,8 @@ static int __init pwrdms_setup(struct powerdomain *pwrdm, void *dir)
 static u32 sleep_while_idle = 1, voltage_off_while_idle = 1;
 
 /*
- * On the N9, Harmattan's pmconfig asks for OFF mode at every boot: the request takes effect once
- * off_mode_armed is 1 (written by hand on test boots). Elsewhere OFF mode is armed from the start.
+ * Harmattan's pmconfig asks for OFF mode at every boot, and gets it as on Nokia's N9 kernel. Writing
+ * 0 to off_mode_armed holds the request back (tests) until 1 is written again.
  */
 static u32 off_mode_requested, off_mode_armed = 1;
 
@@ -265,8 +265,6 @@ static int __init pm_dbg_init(void)
 			    &sleep_while_idle, &pm_dbg_option_fops);
 	debugfs_create_file("voltage_off_while_idle", S_IRUGO | S_IWUSR, d,
 			    &voltage_off_while_idle, &pm_dbg_option_fops);
-	if (of_machine_is_compatible("nokia,omap3-n9"))
-		off_mode_armed = 0;
 	debugfs_create_file("off_mode_armed", S_IRUGO | S_IWUSR, d,
 			    &off_mode_armed, &pm_dbg_option_fops);
 	debugfs_create_file("count_all_domains", S_IRUGO | S_IWUSR, d,
