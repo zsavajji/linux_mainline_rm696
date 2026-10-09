@@ -39,6 +39,7 @@ enum {
 	GPIO_SYSFS_LINE_CLASS_ATTR_VALUE,
 	GPIO_SYSFS_LINE_CLASS_ATTR_EDGE,
 	GPIO_SYSFS_LINE_CLASS_ATTR_ACTIVE_LOW,
+	GPIO_SYSFS_LINE_CLASS_ATTR_NAME,
 	GPIO_SYSFS_LINE_CLASS_ATTR_SENTINEL,
 	GPIO_SYSFS_LINE_CLASS_ATTR_SIZE,
 };
@@ -74,6 +75,7 @@ struct gpiod_data {
 #if IS_ENABLED(CONFIG_GPIO_SYSFS_LEGACY)
 	struct device_attribute edge_attr;
 	struct device_attribute active_low_attr;
+	struct device_attribute name_attr;
 
 	struct attribute *class_attrs[GPIO_SYSFS_LINE_CLASS_ATTR_SIZE];
 	struct attribute_group class_attr_group;
@@ -394,6 +396,23 @@ static ssize_t active_low_store(struct device *dev,
 	guard(mutex)(&data->mutex);
 
 	return gpio_sysfs_set_active_low(data, value) ?: size;
+}
+#endif /* CONFIG_GPIO_SYSFS_LEGACY */
+
+#if IS_ENABLED(CONFIG_GPIO_SYSFS_LEGACY)
+/*
+ * The name the line was requested under, read-only, as Nokia's 2.6.32 gpiolib had it: Harmattan's
+ * udev rule finds the N9's modem lines by it (82-ssc-daemon.rules, ATTR{name}=="cmt_*")
+ */
+static ssize_t name_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct gpiod_data *data = container_of(attr, struct gpiod_data, name_attr);
+	struct gpio_desc *desc = data->desc;
+	const char *label;
+
+	guard(srcu)(&desc->gdev->desc_srcu);
+	label = gpiod_get_label(desc);
+	return sysfs_emit(buf, "%s\n", label ?: "");
 }
 #endif /* CONFIG_GPIO_SYSFS_LEGACY */
 
@@ -782,6 +801,8 @@ int gpiod_export(struct gpio_desc *desc, bool direction_may_change)
 	gpiod_attr_init(&desc_data->edge_attr, "edge", edge_show, edge_store);
 	gpiod_attr_init(&desc_data->active_low_attr, "active_low",
 			active_low_show, active_low_store);
+	gpiod_attr_init(&desc_data->name_attr, "name", name_show, NULL);
+	desc_data->name_attr.attr.mode = 0444;
 
 	attrs = desc_data->class_attrs;
 	desc_data->class_attr_group.is_visible = gpio_is_visible;
@@ -789,6 +810,7 @@ int gpiod_export(struct gpio_desc *desc, bool direction_may_change)
 	attrs[GPIO_SYSFS_LINE_CLASS_ATTR_VALUE] = &desc_data->val_attr.attr;
 	attrs[GPIO_SYSFS_LINE_CLASS_ATTR_EDGE] = &desc_data->edge_attr.attr;
 	attrs[GPIO_SYSFS_LINE_CLASS_ATTR_ACTIVE_LOW] = &desc_data->active_low_attr.attr;
+	attrs[GPIO_SYSFS_LINE_CLASS_ATTR_NAME] = &desc_data->name_attr.attr;
 
 	desc_data->class_attr_group.attrs = desc_data->class_attrs;
 	desc_data->class_attr_groups[0] = &desc_data->class_attr_group;
