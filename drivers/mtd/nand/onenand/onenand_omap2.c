@@ -456,9 +456,54 @@ static void omap2_onenand_shutdown(struct platform_device *pdev)
 	memset((__force void *)c->onenand.base, 0, ONENAND_BUFRAM_SIZE);
 }
 
-static int omap2_onenand_no_erase(struct mtd_info *mtd, struct erase_info *instr)
+/*
+ * RAM-boot tests on the test phone: while set, nothing is written, erased, marked bad or locked (the
+ * test init sets it before Harmattan starts). Off by default, so the flash is written as stock (CAL,
+ * whose writers are BME, DSME and libbb5). The MTD stays writeable either way, since Harmattan's
+ * libcal opens CAL read-write.
+ */
+static bool read_only;
+module_param(read_only, bool, 0644);
+
+static struct {
+	int (*erase)(struct mtd_info *mtd, struct erase_info *instr);
+	int (*write_oob)(struct mtd_info *mtd, loff_t to, struct mtd_oob_ops *ops);
+	int (*panic_write)(struct mtd_info *mtd, loff_t to, size_t len, size_t *retlen,
+			   const u_char *buf);
+	int (*block_markbad)(struct mtd_info *mtd, loff_t ofs);
+	int (*lock)(struct mtd_info *mtd, loff_t ofs, uint64_t len);
+	int (*unlock)(struct mtd_info *mtd, loff_t ofs, uint64_t len);
+} omap2_onenand_rw;
+
+static int omap2_onenand_erase(struct mtd_info *mtd, struct erase_info *instr)
 {
-	return -EROFS;
+	return read_only ? -EROFS : omap2_onenand_rw.erase(mtd, instr);
+}
+
+static int omap2_onenand_write_oob(struct mtd_info *mtd, loff_t to, struct mtd_oob_ops *ops)
+{
+	return read_only ? -EROFS : omap2_onenand_rw.write_oob(mtd, to, ops);
+}
+
+static int omap2_onenand_panic_write(struct mtd_info *mtd, loff_t to, size_t len, size_t *retlen,
+				     const u_char *buf)
+{
+	return read_only ? -EROFS : omap2_onenand_rw.panic_write(mtd, to, len, retlen, buf);
+}
+
+static int omap2_onenand_block_markbad(struct mtd_info *mtd, loff_t ofs)
+{
+	return read_only ? -EROFS : omap2_onenand_rw.block_markbad(mtd, ofs);
+}
+
+static int omap2_onenand_lock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
+{
+	return read_only ? -EROFS : omap2_onenand_rw.lock(mtd, ofs, len);
+}
+
+static int omap2_onenand_unlock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
+{
+	return read_only ? -EROFS : omap2_onenand_rw.unlock(mtd, ofs, len);
 }
 
 static int omap2_onenand_probe(struct platform_device *pdev)
@@ -525,24 +570,34 @@ static int omap2_onenand_probe(struct platform_device *pdev)
 		 c->gpmc_cs, c->phys_base, c->onenand.base,
 		 c->dma_chan ? "DMA" : "PIO");
 
+	/*
+	 * As Nokia's kernel (kernel-plus-harmattan onenand/omap2.c): the blocks stay locked as NOLO left
+	 * them (NOLO locks the bootloader, most of CAL and the kernel tight)
+	 */
+	c->onenand.options |= ONENAND_SKIP_INITIAL_UNLOCKING;
+
 	r = onenand_scan(&c->mtd, 1);
 	if (r < 0)
 		goto err_release_dma;
 
 	/*
-	 * This test kernel never changes the phone's OneNAND (NOLO, the stock kernel, CAL): reads only.
-	 * The MTD stays "writeable", since mtdchar refuses read-write opens of a read-only one and
-	 * Harmattan's libcal opens CAL read-write. Instead the operations that change the flash go (the
-	 * MTD core then fails writes, bad-block marks, OTP writes and locks) and erase fails.
+	 * and each page programmed on its own, as stock: no cache program, whose multi-page writes the
+	 * write verify (omap2plus's MTD_ONENAND_VERIFY_WRITE) reads back while they still run
 	 */
-	c->mtd._erase = omap2_onenand_no_erase;
-	c->mtd._write_oob = NULL;
-	c->mtd._panic_write = NULL;
-	c->mtd._block_markbad = NULL;
-	c->mtd._write_user_prot_reg = NULL;
-	c->mtd._lock_user_prot_reg = NULL;
-	c->mtd._lock = NULL;
-	c->mtd._unlock = NULL;
+	c->onenand.options &= ~ONENAND_HAS_CACHE_PROGRAM;
+
+	omap2_onenand_rw.erase = c->mtd._erase;
+	omap2_onenand_rw.write_oob = c->mtd._write_oob;
+	omap2_onenand_rw.panic_write = c->mtd._panic_write;
+	omap2_onenand_rw.block_markbad = c->mtd._block_markbad;
+	omap2_onenand_rw.lock = c->mtd._lock;
+	omap2_onenand_rw.unlock = c->mtd._unlock;
+	c->mtd._erase = omap2_onenand_erase;
+	c->mtd._write_oob = omap2_onenand_write_oob;
+	c->mtd._panic_write = omap2_onenand_panic_write;
+	c->mtd._block_markbad = omap2_onenand_block_markbad;
+	c->mtd._lock = omap2_onenand_lock;
+	c->mtd._unlock = omap2_onenand_unlock;
 
 	freq = omap2_onenand_get_freq(c->onenand.version_id);
 	if (freq > 0) {
