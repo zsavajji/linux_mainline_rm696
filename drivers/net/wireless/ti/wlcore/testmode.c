@@ -24,7 +24,7 @@ enum wl1271_tm_commands {
 	WL1271_TM_CMD_TEST,
 	WL1271_TM_CMD_INTERROGATE,
 	WL1271_TM_CMD_CONFIGURE,
-	WL1271_TM_CMD_NVS_PUSH,		/* Not in use. Keep to not break ABI */
+	WL1271_TM_CMD_NVS_PUSH,
 	WL1271_TM_CMD_SET_PLT_MODE,
 	WL1271_TM_CMD_RECOVER,		/* Not in use. Keep to not break ABI */
 	WL1271_TM_CMD_GET_MAC,
@@ -346,6 +346,37 @@ out:
 	return ret;
 }
 
+/*
+ * Harmattan's /usr/bin/wl1271-cal pushes CAL's NVS (wlan-nvs-t1, with its regional TX power limits
+ * applied) once wlan0 exists; it's used at the next chip boot, when the interface comes up. As
+ * Nokia's driver (kernel-plus-harmattan drivers/net/wireless/wl12xx/testmode.c).
+ */
+static int wl1271_tm_cmd_nvs_push(struct wl1271 *wl, struct nlattr *tb[])
+{
+	void *nvs;
+	int len;
+
+	if (!tb[WL1271_TM_ATTR_DATA])
+		return -EINVAL;
+
+	len = nla_len(tb[WL1271_TM_ATTR_DATA]);
+	if (len != sizeof(struct wl1271_nvs_file) &&
+	    len != WL1271_INI_LEGACY_NVS_FILE_SIZE)
+		return -EINVAL;
+
+	nvs = kmemdup(nla_data(tb[WL1271_TM_ATTR_DATA]), len, GFP_KERNEL);
+	if (!nvs)
+		return -ENOMEM;
+
+	mutex_lock(&wl->mutex);
+	kfree(wl->nvs);
+	wl->nvs = nvs;
+	wl->nvs_len = len;
+	mutex_unlock(&wl->mutex);
+
+	return 0;
+}
+
 int wl1271_tm_cmd(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		  void *data, int len)
 {
@@ -376,6 +407,8 @@ int wl1271_tm_cmd(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		return wl1271_tm_cmd_interrogate(wl, tb);
 	case WL1271_TM_CMD_CONFIGURE:
 		return wl1271_tm_cmd_configure(wl, tb);
+	case WL1271_TM_CMD_NVS_PUSH:
+		return wl1271_tm_cmd_nvs_push(wl, tb);
 	case WL1271_TM_CMD_SET_PLT_MODE:
 		return wl1271_tm_cmd_set_plt_mode(wl, tb);
 	case WL1271_TM_CMD_GET_MAC:
