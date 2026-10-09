@@ -87,6 +87,28 @@ struct eth_dev {
 	u8			dev_mac[ETH_ALEN];
 };
 
+/*
+ * gether_detach_gadget() keeps the net_device registered after the gadget unbinds, with
+ * dev->gadget NULL, and userspace can still bring it down: composite.h's messages go through
+ * the gadget, so print against the net_device then (an ifconfig down of such an interface
+ * crashed in eth_stop()'s DBG() with CONFIG_USB_GADGET_DEBUG)
+ */
+static inline struct device *eth_msg_dev(struct eth_dev *dev)
+{
+	return dev->gadget ? &dev->gadget->dev : &dev->net->dev;
+}
+
+#undef DBG
+#undef VDBG
+#undef ERROR
+#undef WARNING
+#undef INFO
+#define DBG(d, fmt, args...)		dev_dbg(eth_msg_dev(d), fmt, ## args)
+#define VDBG(d, fmt, args...)		dev_vdbg(eth_msg_dev(d), fmt, ## args)
+#define ERROR(d, fmt, args...)		dev_err(eth_msg_dev(d), fmt, ## args)
+#define WARNING(d, fmt, args...)	dev_warn(eth_msg_dev(d), fmt, ## args)
+#define INFO(d, fmt, args...)		dev_info(eth_msg_dev(d), fmt, ## args)
+
 /*-------------------------------------------------------------------------*/
 
 #define RX_EXTRA	20	/* bytes guarding against rx overflows */
