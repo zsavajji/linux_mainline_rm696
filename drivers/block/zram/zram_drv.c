@@ -34,6 +34,7 @@
 #include <linux/cpuhotplug.h>
 #include <linux/part_stat.h>
 #include <linux/kernel_read_file.h>
+#include <linux/swap.h>
 
 #include "zram_drv.h"
 
@@ -2485,18 +2486,11 @@ static void zram_reset_device(struct zram *zram)
 	reset_bdev(zram);
 }
 
-static ssize_t disksize_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t len)
+static int zram_set_disksize(struct zram *zram, u64 disksize)
 {
-	u64 disksize;
 	struct zcomp *comp;
-	struct zram *zram = dev_to_zram(dev);
 	int err;
 	u32 prio;
-
-	disksize = memparse(buf, NULL);
-	if (!disksize)
-		return -EINVAL;
 
 	down_write(&zram->init_lock);
 	if (init_done(zram)) {
@@ -2531,7 +2525,7 @@ static ssize_t disksize_store(struct device *dev,
 	set_capacity_and_notify(zram->disk, zram->disksize >> SECTOR_SHIFT);
 	up_write(&zram->init_lock);
 
-	return len;
+	return 0;
 
 out_free_comps:
 	zram_destroy_comps(zram);
@@ -2541,27 +2535,28 @@ out_unlock:
 	return err;
 }
 
-static ssize_t reset_store(struct device *dev,
+static ssize_t disksize_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
-	int ret;
-	unsigned short do_reset;
-	struct zram *zram;
-	struct gendisk *disk;
+	u64 disksize;
+	int err;
 
-	ret = kstrtou16(buf, 10, &do_reset);
-	if (ret)
-		return ret;
-
-	if (!do_reset)
+	disksize = memparse(buf, NULL);
+	if (!disksize)
 		return -EINVAL;
 
-	zram = dev_to_zram(dev);
-	disk = zram->disk;
+	err = zram_set_disksize(dev_to_zram(dev), disksize);
+	return err ?: len;
+}
+
+/* openers: the opens the caller itself holds (ramzswap's reset ioctl) */
+static int zram_reset(struct zram *zram, unsigned int openers)
+{
+	struct gendisk *disk = zram->disk;
 
 	mutex_lock(&disk->open_mutex);
 	/* Do not reset an active device or claimed device */
-	if (disk_openers(disk) || zram->claim) {
+	if (disk_openers(disk) > openers || zram->claim) {
 		mutex_unlock(&disk->open_mutex);
 		return -EBUSY;
 	}
@@ -2578,7 +2573,24 @@ static ssize_t reset_store(struct device *dev,
 	zram->claim = false;
 	mutex_unlock(&disk->open_mutex);
 
-	return len;
+	return 0;
+}
+
+static ssize_t reset_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int ret;
+	unsigned short do_reset;
+
+	ret = kstrtou16(buf, 10, &do_reset);
+	if (ret)
+		return ret;
+
+	if (!do_reset)
+		return -EINVAL;
+
+	ret = zram_reset(dev_to_zram(dev), 0);
+	return ret ?: len;
 }
 
 static int zram_open(struct gendisk *disk, blk_mode_t mode)
@@ -2593,8 +2605,66 @@ static int zram_open(struct gendisk *disk, blk_mode_t mode)
 	return 0;
 }
 
+/*
+ * Harmattan's /usr/bin/rzscontrol, which its enable-swap job runs: the ioctls of ramzswap, zram's
+ * 2.6.32 form (kernel-plus-harmattan drivers/staging/ramzswap/ramzswap_ioctl.h). The job uses the
+ * disk size, init (which writes the swap header: the job runs no mkswap) and reset; the backing
+ * swap, the memory limit and the statistics aren't here.
+ */
+#define RZSIO_SET_DISKSIZE_KB	_IOW('z', 0, u32)
+#define RZSIO_INIT		_IO('z', 4)
+#define RZSIO_RESET		_IO('z', 5)
+
+static int ramzswap_init(struct zram *zram)
+{
+	/* without a size, ramzswap's default: a quarter of RAM */
+	u64 disksize = zram->rzs_disksize ?: (u64)totalram_pages() * PAGE_SIZE / 4;
+	union swap_header *hdr;
+	struct page *page;
+	int err;
+
+	err = zram_set_disksize(zram, disksize);
+	if (err)
+		return err;
+
+	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	if (!page)
+		return -ENOMEM;
+	hdr = page_address(page);
+	hdr->info.version = 1;
+	hdr->info.last_page = (zram->disksize >> PAGE_SHIFT) - 1;
+	memcpy(hdr->magic.magic, "SWAPSPACE2", sizeof(hdr->magic.magic));
+	err = zram_write_page(zram, page, 0);
+	__free_page(page);
+	return err;
+}
+
+static int ramzswap_ioctl(struct block_device *bdev, blk_mode_t mode, unsigned int cmd,
+			  unsigned long arg)
+{
+	struct zram *zram = bdev->bd_disk->private_data;
+	u32 kb;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	switch (cmd) {
+	case RZSIO_SET_DISKSIZE_KB:
+		if (get_user(kb, (u32 __user *)arg))
+			return -EFAULT;
+		zram->rzs_disksize = (u64)kb << 10;
+		return 0;
+	case RZSIO_INIT:
+		return ramzswap_init(zram);
+	case RZSIO_RESET:
+		return zram_reset(zram, 1);	/* rzscontrol's own open */
+	}
+	return -ENOTTY;
+}
+
 static const struct block_device_operations zram_devops = {
 	.open = zram_open,
+	.ioctl = ramzswap_ioctl,
 	.submit_bio = zram_submit_bio,
 	.swap_slot_free_notify = zram_slot_free_notify,
 	.owner = THIS_MODULE
@@ -2710,7 +2780,8 @@ static int zram_add(void)
 	zram->disk->flags |= GENHD_FL_NO_PART;
 	zram->disk->fops = &zram_devops;
 	zram->disk->private_data = zram;
-	snprintf(zram->disk->disk_name, 16, "zram%d", device_id);
+	/* /dev/ramzswap0, the name Harmattan's enable-swap job uses (ramzswap, zram in 2.6.32) */
+	snprintf(zram->disk->disk_name, 16, "ramzswap%d", device_id);
 	atomic_set(&zram->pp_in_progress, 0);
 	zram_comp_params_reset(zram);
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);

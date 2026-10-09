@@ -119,6 +119,7 @@ struct zram {
 	 * we can store in a disk.
 	 */
 	u64 disksize;	/* bytes */
+	u64 rzs_disksize;	/* bytes, ramzswap's RZSIO_SET_DISKSIZE_KB for RZSIO_INIT */
 	const char *comp_algs[ZRAM_MAX_COMPS];
 	s8 num_active_comps;
 	/*
