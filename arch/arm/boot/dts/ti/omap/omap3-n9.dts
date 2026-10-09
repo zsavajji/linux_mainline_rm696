@@ -400,14 +400,9 @@
 	};
 };
 
-/*
- * No power-off: the test phone's power button is broken, so a phone that powers off stays off.
- * Without a handler, a power-off (DSME's shutdown, check_wipe's SysRq-O) halts instead, and the
- * watchdogs reset the phone into NOLO and stock Harmattan.
- */
+/* Power-off as stock (n9_power_off(); twl4030_power.poweroff_halt=1 halts instead, for tests) */
 &twl_power {
 	compatible = "nokia,twl5031-power-n9", "ti,twl4030-power";	/* Nokia's sleep scripts */
-	/delete-property/ ti,use_poweroff;
 };
 
 /* The TWL5031's charger (BCC) is not the TWL4030 BCI this node's driver programs; BME drives it */

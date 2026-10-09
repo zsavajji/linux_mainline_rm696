@@ -674,6 +674,42 @@ void twl4030_power_off(void)
 		pr_err("TWL4030 Unable to power off\n");
 }
 
+/*
+ * RAM-boot tests on a phone whose power button is broken: halt instead, and let the running
+ * watchdogs reset the phone. Off by default, so the kernel powers off as stock.
+ */
+static bool poweroff_halt;
+module_param(poweroff_halt, bool, 0644);
+
+/*
+ * The N9's power-off as Nokia's kernel did it (twl4030_poweroff() in kernel-plus-harmattan):
+ * DEVOFF for all three processor groups, the start-on events left alone. A charger plugged in
+ * then starts the phone again, which is how Harmattan's charging while off (ACT_DEAD) begins.
+ */
+static void n9_power_off(void)
+{
+	u8 val[3];
+	int err;
+
+	if (poweroff_halt) {
+		pr_emerg("TWL4030 poweroff_halt set, halting\n");
+		for (;;)
+			cpu_relax();	/* interrupts are off, devices shut down */
+	}
+
+	err = twl_i2c_read(TWL_MODULE_PM_MASTER, val, TWL4030_PM_MASTER_P1_SW_EVENTS, 3);
+	if (err) {
+		pr_err("TWL4030 Unable to read SW_EVENTS\n");
+		return;
+	}
+	val[0] |= PWR_DEVOFF;
+	val[1] |= PWR_DEVOFF;
+	val[2] |= PWR_DEVOFF;
+	err = twl_i2c_write(TWL_MODULE_PM_MASTER, val, TWL4030_PM_MASTER_P1_SW_EVENTS, 3);
+	if (err)
+		pr_err("TWL4030 Unable to power off\n");
+}
+
 static bool twl4030_power_use_poweroff(const struct twl4030_power_data *pdata,
 					struct device_node *node)
 {
@@ -998,7 +1034,7 @@ static int twl4030_power_probe(struct platform_device *pdev)
 			}
 		}
 
-		pm_power_off = twl4030_power_off;
+		pm_power_off = pdata == &n9_power ? n9_power_off : twl4030_power_off;
 	}
 
 relock:
