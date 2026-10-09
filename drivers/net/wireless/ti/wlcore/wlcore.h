@@ -215,6 +215,9 @@ struct wl1271 {
 
 	s8 hw_pg_ver;
 
+	/* allow_adhoc written 0 (Harmattan's wl1271-cal, by region): no ad-hoc interfaces */
+	bool no_adhoc;
+
 	/* address read from the fuse ROM */
 	u32 fuse_oui_addr;
 	u32 fuse_nic_addr;

@@ -2619,6 +2619,12 @@ static int wl1271_op_add_interface(struct ieee80211_hw *hw,
 		goto out_unlock;
 	}
 
+	if (wl->no_adhoc && vif->type == NL80211_IFTYPE_ADHOC) {
+		wl1271_error("Adhoc not supported on this device.");	/* as Nokia's driver */
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
 
 	ret = wl12xx_init_vif_data(wl, vif);
 	if (ret < 0)

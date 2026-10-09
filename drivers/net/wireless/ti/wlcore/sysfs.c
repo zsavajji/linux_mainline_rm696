@@ -87,6 +87,38 @@ static ssize_t hw_pg_ver_show(struct device *dev,
 
 static DEVICE_ATTR_RO(hw_pg_ver);
 
+/*
+ * As Nokia's driver (kernel-plus-harmattan drivers/net/wireless/wl12xx/main.c): Harmattan's
+ * wl1271-cal writes allow_adhoc for the phone's region, at stock's path
+ * /sys/devices/platform/wl1271/allow_adhoc (a link to this device, made below); 0 refuses ad-hoc
+ */
+static ssize_t allow_adhoc_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct wl1271 *wl = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", !wl->no_adhoc);
+}
+
+static ssize_t allow_adhoc_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct wl1271 *wl = dev_get_drvdata(dev);
+	unsigned long res;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &res);
+	if (ret < 0)
+		return ret;
+
+	mutex_lock(&wl->mutex);
+	wl->no_adhoc = !res;
+	mutex_unlock(&wl->mutex);
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(allow_adhoc);
+
 static ssize_t wl1271_sysfs_read_fwlog(struct file *filp, struct kobject *kobj,
 				       const struct bin_attribute *bin_attr,
 				       char *buffer, loff_t pos, size_t count)
@@ -149,7 +181,20 @@ int wlcore_sysfs_init(struct wl1271 *wl)
 		goto out_hw_pg_ver;
 	}
 
+	ret = device_create_file(wl->dev, &dev_attr_allow_adhoc);
+	if (ret < 0) {
+		wl1271_error("failed to create sysfs file allow_adhoc");
+		goto out_fwlog;
+	}
+
+	/* the files at stock's path too (Harmattan's wl1271-cal, wlancond) */
+	if (sysfs_create_link(&platform_bus.kobj, &wl->dev->kobj, "wl1271"))
+		wl1271_warning("no /sys/devices/platform/wl1271");
+
 	goto out;
+
+out_fwlog:
+	device_remove_bin_file(wl->dev, &fwlog_attr);
 
 out_hw_pg_ver:
 	device_remove_file(wl->dev, &dev_attr_hw_pg_ver);
@@ -163,6 +208,9 @@ out:
 
 void wlcore_sysfs_free(struct wl1271 *wl)
 {
+	sysfs_remove_link(&platform_bus.kobj, "wl1271");
+	device_remove_file(wl->dev, &dev_attr_allow_adhoc);
+
 	device_remove_bin_file(wl->dev, &fwlog_attr);
 
 	device_remove_file(wl->dev, &dev_attr_hw_pg_ver);
