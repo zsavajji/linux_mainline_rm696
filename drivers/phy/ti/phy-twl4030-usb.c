@@ -186,6 +186,7 @@ struct twl4030_usb {
 	unsigned long		needs_resume:1;
 	bool			powered;	/* supplies on, PHY powered up */
 	bool			dcd;		/* the last charger detection saw data contact */
+	bool			musb_cable;	/* musb was told of this cable */
 
 	struct delayed_work	id_workaround_work;
 	struct work_struct	charger_work;
@@ -708,6 +709,7 @@ static void twl5031_charger_work(struct work_struct *work)
 
 	/* stock's USB_EVENT_TRY_CONN: the PHY up, musb told of VBUS */
 	twl4030_usb_runtime_resume(twl->dev);
+	twl->musb_cable = true;
 	if (musb_mailbox(MUSB_VBUS_VALID))
 		twl->musb_mailbox_pending = true;
 }
@@ -819,7 +821,7 @@ static irqreturn_t twl4030_usb_irq(int irq, void *_twl)
 			if (status == MUSB_VBUS_VALID && twl->phy.charger_detect)
 				schedule_work(&twl->charger_work);
 			else
-				twl->musb_mailbox_pending = true;
+				twl->musb_mailbox_pending = twl->musb_cable = true;
 		}
 	} else {
 		if (atomic_add_unless(&twl->connected, -1, 0)) {
@@ -831,7 +833,14 @@ static irqreturn_t twl4030_usb_irq(int irq, void *_twl)
 			}
 			pm_runtime_mark_last_busy(twl->dev);
 			pm_runtime_put_autosuspend(twl->dev);
-			twl->musb_mailbox_pending = true;
+			/*
+			 * Not for a cable musb never heard of (a dedicated charger, a failed DCD),
+			 * as stock: its VBUS_OFF would run the controller with the PHY the
+			 * detection left powered down (no ULPI clock), after which CORE stayed out
+			 * of retention until the PHY next powered up
+			 */
+			twl->musb_mailbox_pending = twl->musb_cable;
+			twl->musb_cable = false;
 		}
 	}
 	if (twl->musb_mailbox_pending) {
