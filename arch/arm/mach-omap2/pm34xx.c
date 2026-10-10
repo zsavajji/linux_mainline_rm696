@@ -443,9 +443,11 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 	 * On EMU/HS devices ROM code restores a SRDC value
 	 * from scratchpad which has automatic self refresh on timeout
 	 * of AUTO_CNT = 1 enabled. This takes care of erratum ID i443.
-	 * Hence store/restore the SDRC_POWER register here.
+	 * Hence store/restore the SDRC_POWER register here. Same test as the
+	 * scratchpad's in control.c, so the 3630 too (HS N9): left in place,
+	 * the self refresh made every SDRAM access after an OFF 3x slower.
 	 */
-	if (cpu_is_omap3430() && omap_rev() >= OMAP3430_REV_ES3_0 &&
+	if (omap_rev() >= OMAP3430_REV_ES3_0 &&
 	    (omap_type() == OMAP2_DEVICE_TYPE_EMU ||
 	     omap_type() == OMAP2_DEVICE_TYPE_SEC) &&
 	    core_next_state == PWRDM_POWER_OFF)
@@ -471,7 +473,7 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		ct_cpuidle_exit();
 
 	/* Restore normal SDRC POWER settings */
-	if (cpu_is_omap3430() && omap_rev() >= OMAP3430_REV_ES3_0 &&
+	if (omap_rev() >= OMAP3430_REV_ES3_0 &&
 	    (omap_type() == OMAP2_DEVICE_TYPE_EMU ||
 	     omap_type() == OMAP2_DEVICE_TYPE_SEC) &&
 	    core_next_state == PWRDM_POWER_OFF)
