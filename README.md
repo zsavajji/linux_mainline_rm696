@@ -10,17 +10,20 @@ The configuration is `omap2plus_defconfig` with `arch/arm/configs/rm696.config` 
 
 ## Building
 
-A bootable N9 image needs more than this tree: the SGX GPU driver (built against it as external
-modules), WLAN firmware and the initramfs. The build kit, **n9-618-port**, builds all of it into one
-file NOLO boots:
+A bootable N9 image needs more than this tree: the SGX GPU driver
+([pvr_sgx_rm696](https://github.com/zsavajji/pvr_sgx_rm696), built against it as external modules), WLAN
+firmware and the initramfs. The build kit, [n9-618-port](https://github.com/zsavajji/n9-618-port), builds
+all of it into one file NOLO boots:
 
 ```sh
-git clone --depth 1 --branch rm696 <this repository> linux_mainline_rm696
-git clone <n9-618-port> n9-618-port
+git clone --depth 1 --branch rm696 https://github.com/zsavajji/linux_mainline_rm696
+git clone https://github.com/zsavajji/pvr_sgx_rm696
+git clone https://github.com/zsavajji/n9-618-port
 cd n9-618-port && RELEASE=1 kernel/build.sh     # -> build/zImage-n9-release
 ```
 
-Its documentation covers installing, the rescue SSH server, what works and what each change is for.
+The kit's documentation (`docs/`) covers installing, the rescue SSH server, what works and what each
+change is for.
 
 Linux's own README is `README`.
 
