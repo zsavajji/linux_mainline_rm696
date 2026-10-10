@@ -22,8 +22,8 @@ git clone https://github.com/zsavajji/n9-618-port
 cd n9-618-port && RELEASE=1 kernel/build.sh     # -> build/zImage-n9-release
 ```
 
-The kit's documentation (`docs/`) covers installing, the rescue SSH server, what works and what each
-change is for.
+The kit's documentation, online at https://zsavajji.github.io/n9-618-port/, covers installing, the rescue SSH server, what works and
+what each change is for.
 
 Linux's own README is `README`.
 
