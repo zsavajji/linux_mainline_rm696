@@ -79,6 +79,8 @@ struct panel_drv_data {
 	bool te_enabled;
 
 	atomic_t do_update;
+	/* TE interrupts dsicm_te_isr() ignores, see _dsicm_enable_te() */
+	atomic_t te_skip;
 	int channel;
 
 	struct delayed_work te_timeout_work;
@@ -379,6 +381,15 @@ static int dsicm_exit_ulps(struct panel_drv_data *ddata)
 	if (!ddata->ulps_enabled)
 		return 0;
 
+	/*
+	 * The TE irq back on before the DSI and TEAR_ON: an edge latched while it was off comes back
+	 * now (resent, at no particular point of the scan) and goes to the ISR while it still ignores
+	 * everything, instead of passing for a TE: the first frame after a pause started at once
+	 * (a late start) with its halves timed from it
+	 */
+	if (ddata->ext_te_gpio)
+		enable_irq(gpiod_to_irq(ddata->ext_te_gpio));
+
 	dsicm_set_l3_hold(ddata, true);
 	r = in->ops.dsi->enable(in);
 	if (r) {
@@ -393,9 +404,8 @@ static int dsicm_exit_ulps(struct panel_drv_data *ddata)
 		dev_err(&ddata->pdev->dev, "failed to re-enable TE");
 		goto err2;
 	}
-
-	if (ddata->ext_te_gpio)
-		enable_irq(gpiod_to_irq(ddata->ext_te_gpio));
+	/* stock's count leaving ULPS: one TE skipped after TEAR_ON, not two */
+	atomic_dec_if_positive(&ddata->te_skip);
 
 	dsicm_queue_ulps_work(ddata);
 
@@ -407,12 +417,11 @@ err2:
 	dev_err(&ddata->pdev->dev, "failed to exit ULPS");
 
 	r = dsicm_panel_reset(ddata);
-	if (!r) {
-		if (ddata->ext_te_gpio)
-			enable_irq(gpiod_to_irq(ddata->ext_te_gpio));
+	if (!r)
 		ddata->ulps_enabled = false;
-	}
 err1:
+	if (ddata->ulps_enabled && ddata->ext_te_gpio)
+		disable_irq(gpiod_to_irq(ddata->ext_te_gpio));
 	dsicm_set_l3_hold(ddata, ddata->enabled && !ddata->ulps_enabled);
 	dsicm_queue_ulps_work(ddata);
 
@@ -1616,6 +1625,9 @@ static irqreturn_t dsicm_te_isr(int irq, void *data)
 	int old;
 	int r;
 
+	if (atomic_add_unless(&ddata->te_skip, -1, 0))
+		return IRQ_HANDLED;
+
 	/* the frame period, from the TE line (longer in low power mode) */
 	ddata->te_last = now;
 	if (frame > 10000 && frame < (ddata->lpm ? 100000 : 40000))
@@ -1777,10 +1789,17 @@ static int _dsicm_enable_te(struct panel_drv_data *ddata, bool enable)
 	struct omap_dss_device *in = ddata->in;
 	int r;
 
-	if (enable)
+	/*
+	 * As stock: the first two TEs after TEAR_ON are ignored (the SMD Pyrenees sends a few irregular
+	 * ones then), and none counts while TE is off (a latched edge resent by enable_irq())
+	 */
+	if (enable) {
+		atomic_set(&ddata->te_skip, 2);
 		r = dsicm_dcs_write_1(ddata, MIPI_DCS_SET_TEAR_ON, 0);
-	else
+	} else {
+		atomic_set(&ddata->te_skip, INT_MAX);
 		r = dsicm_dcs_write_0(ddata, MIPI_DCS_SET_TEAR_OFF);
+	}
 
 	/* landscape updates go in halves, timed from the TE line (see dsicm_split_half) */
 	if (!r && enable && (ddata->rotate & 1))
