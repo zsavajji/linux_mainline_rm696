@@ -1789,8 +1789,12 @@ static int _dsicm_enable_te(struct panel_drv_data *ddata, bool enable)
 	if (!ddata->ext_te_gpio)
 		in->ops.dsi->enable_te(in, enable);
 
-	/* possible panel bug */
-	msleep(100);
+	/*
+	 * possible panel bug: Taal's. Nokia's driver waited only for Taal, not for the Pyrenees
+	 * (panel-nokia-dsi.c sleep.enable_te), and this runs at every ULPS exit and entry
+	 */
+	if (!ddata->pyrenees)
+		msleep(100);
 
 	return r;
 }
