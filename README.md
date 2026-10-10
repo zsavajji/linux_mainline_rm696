@@ -15,7 +15,7 @@ modules), WLAN firmware and the initramfs. The build kit, **n9-618-port**, build
 file NOLO boots:
 
 ```sh
-git clone --depth 1 --branch rm696 <this repository> kernel_mainline_rm696
+git clone --depth 1 --branch rm696 <this repository> linux_mainline_rm696
 git clone <n9-618-port> n9-618-port
 cd n9-618-port && RELEASE=1 kernel/build.sh     # -> build/zImage-n9-release
 ```
