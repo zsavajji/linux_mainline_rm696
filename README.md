@@ -1,9 +1,10 @@
 # Linux 6.18 for the Nokia N9
 
-This is linux-stable **v6.18.53** with the changes that let the Nokia N9 (RM-696) run its stock
+This is linux-stable **v6.18.55** with the changes that let the Nokia N9 (RM-696) run its stock
 Harmattan PR1.3 userspace, unmodified: Nokia's drivers and interfaces brought forward, power
 management as Nokia's kernel did it, and fixes to mainline bugs found on the way. Each change is one
-commit on branch `rm696`, with its reason in the message: `git log v6.18.53..rm696`.
+commit on branch `rm696`, with its reason in the message: `git log --no-merges v6.18.55..rm696`
+(they started on v6.18.53; stable releases come in as merges of their tags).
 
 The configuration is `omap2plus_defconfig` with `arch/arm/configs/rm696.config` on top.
 
