@@ -519,12 +519,21 @@ __cpuidle void omap_sram_idle(bool rcuidle)
 		pwrdm_set_next_pwrst(per_pwrdm, PWRDM_POWER_OFF);
 }
 
+/*
+ * The idle loop's fallback while cpuidle is unavailable (a governor switch, the device's
+ * registration). omap3_do_wfi ends with omap34xx_cpu_suspend's "ldmfd sp!, {r4 - r11, pc}":
+ * called from C it popped nine words of the idle task's stack and returned through one (PC 0 after
+ * "echo teo > current_governor", 2026-10-12). Go through omap_sram_idle() as cpuidle's C1 does,
+ * MPU and CORE ON: the next states left by the last cpuidle entry may be OFF.
+ */
 static void omap3_pm_idle(void)
 {
 	if (omap_irq_pending())
 		return;
 
-	omap3_do_wfi();
+	pwrdm_set_next_pwrst(mpu_pwrdm, PWRDM_POWER_ON);
+	pwrdm_set_next_pwrst(core_pwrdm, PWRDM_POWER_ON);
+	omap_sram_idle(false);
 }
 
 #ifdef CONFIG_SUSPEND
