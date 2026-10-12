@@ -131,6 +131,7 @@ static struct usb_configuration msg_config_driver = {
 	.label			= "Linux File-Backed Storage",
 	.bConfigurationValue	= 1,
 	.bmAttributes		= USB_CONFIG_ATT_SELFPOWER,
+	.MaxPower		= 500,	/* as Nokia's N9 gadgets: BME charges by it */
 };
 
 

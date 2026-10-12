@@ -232,6 +232,7 @@ static struct usb_configuration rndis_config_driver = {
 	.bConfigurationValue	= 2,
 	/* .iConfiguration = DYNAMIC */
 	.bmAttributes		= USB_CONFIG_ATT_SELFPOWER,
+	.MaxPower		= 500,	/* as Nokia's N9 gadgets: BME charges by it */
 };
 
 /*-------------------------------------------------------------------------*/
@@ -297,6 +298,7 @@ static struct usb_configuration eth_config_driver = {
 	.bConfigurationValue	= 1,
 	/* .iConfiguration = DYNAMIC */
 	.bmAttributes		= USB_CONFIG_ATT_SELFPOWER,
+	.MaxPower		= 500,	/* as Nokia's N9 gadgets: BME charges by it */
 };
 
 /*-------------------------------------------------------------------------*/
