@@ -444,7 +444,10 @@ static struct cpuidle_driver omap3430_idle_driver = {
  * latency, then the residency threshold). The generic table above says C5 exits in 10 ms, which the
  * display's 6 ms limit refuses, where Nokia measured 5.6 ms and let C5 run with the screen on; and it
  * lets the governor take MPU retention from 300 us of idle, where Nokia's 252 us of entry and exit
- * asked for 29 ms. C7 takes stock's C8: OFF with the secure RAM save, which ours always does.
+ * asked for 29 ms. C7 is stock's C7, CORE OFF with a clean secure RAM: stock offered its C8 (OFF
+ * with a full save, 14643 + 7615 us, 158 ms) only while a secure call had left the secure RAM dirty,
+ * rarely, though it called the ROM's save before every CORE OFF (most return 1 here, 4ea7a477f).
+ * With C8's 158 ms for every OFF, menu chose CORE retention for idles of 100-300 ms (2026-10-13).
  */
 static const struct {
 	unsigned int exit_latency, target_residency;
@@ -455,7 +458,7 @@ static const struct {
 	{ 1928 + 381, 42648 },
 	{ 4624 + 987, 56119 },
 	{ 6391 + 1294, 77616 },
-	{ 14643 + 7615, 158105 },
+	{ 14643 + 1175, 99114 },
 };
 
 /* Public functions */
