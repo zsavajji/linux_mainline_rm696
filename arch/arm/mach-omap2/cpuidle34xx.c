@@ -24,6 +24,8 @@
 #include <linux/export.h>
 #include <linux/cpu_pm.h>
 #include <linux/of.h>
+#include <linux/moduleparam.h>
+#include <linux/tick.h>
 #include <asm/cpuidle.h>
 
 #include "powerdomain.h"
@@ -243,6 +245,27 @@ static bool omap3_core_off_allowed(void)
 	return true;
 }
 
+/*
+ * In standby, the deepest state the next timer allows, as Nokia's menu governor, which took the
+ * deepest state whenever no CORE or PER module ran (cpuidle_chip_is_idle()). 6.18's menu guesses
+ * from the last 8 idles instead, and as every N9 state from C3 on asks for more than the 7.8 ms
+ * tick, a guess of 29-99 ms stops the tick and keeps CORE on or in retention until the next timer:
+ * a standby night spent 22-27% of its time in C3/C4 idles of 99 ms or more and 30% in C5/C6
+ * ones, against 28% in C7 (2026-10-15). Switchable at runtime for an A/B.
+ */
+static bool chip_idle_deepest = true;
+module_param(chip_idle_deepest, bool, 0644);
+
+/* Nokia's cpuidle_chip_is_idle(): no functional clock in CORE or PER (the UARTs aside) */
+static bool omap3_chip_idle(void)
+{
+	return !(omap2_cm_read_mod_reg(CORE_MOD, CM_FCLKEN1) &
+		 ~(OMAP3430_EN_UART1_MASK | OMAP3430_EN_UART2_MASK)) &&
+	       !omap2_cm_read_mod_reg(CORE_MOD, OMAP3430ES2_CM_FCLKEN3) &&
+	       !(omap2_cm_read_mod_reg(OMAP3430_PER_MOD, CM_FCLKEN) & ~OMAP3430_EN_UART3_MASK) &&
+	       omap3_core_off_allowed();
+}
+
 /**
  * omap3_enter_idle_bm - Checks for any bus activity
  * @dev: cpuidle device
@@ -259,6 +282,17 @@ static int omap3_enter_idle_bm(struct cpuidle_device *dev,
 	int new_state_idx, ret;
 	u8 per_next_state, per_saved_state;
 	struct omap3_idle_statedata *cx;
+
+	/* With the tick stopped, its clockevent holds the next timer */
+	if (chip_idle_deepest && tick_nohz_tick_stopped() && omap3_chip_idle()) {
+		s64 sleep_ns = ktime_to_ns(ktime_sub(tick_nohz_get_next_hrtimer(), ktime_get()));
+		s64 latency_req = cpuidle_governor_latency_req(dev->cpu);
+
+		while (index + 1 < drv->state_count && !dev->states_usage[index + 1].disable &&
+		       drv->states[index + 1].target_residency_ns <= sleep_ns &&
+		       drv->states[index + 1].exit_latency_ns <= latency_req)
+			index++;
+	}
 
 	/*
 	 * Use only C1 if CAM is active.
