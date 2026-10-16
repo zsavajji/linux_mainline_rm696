@@ -6820,7 +6820,8 @@ int wlcore_probe(struct wl1271 *wl, struct platform_device *pdev)
 	}
 
 	wl->dev->driver->pm = &wlcore_pm_ops;
-	pm_runtime_set_autosuspend_delay(wl->dev, 50);
+	/* Nokia's N9 driver entered ELP 5 ms after the last access (ELP_ENTRY_DELAY) */
+	pm_runtime_set_autosuspend_delay(wl->dev, 5);
 	pm_runtime_use_autosuspend(wl->dev);
 	pm_runtime_enable(wl->dev);
 
