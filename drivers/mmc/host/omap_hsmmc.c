@@ -139,6 +139,8 @@
 #define ACNE	(1 << 0)
 
 #define MMC_AUTOSUSPEND_DELAY	100
+/* Nokia's N9 kernel: the WLAN slot (no power_saving) turned its clocks off after 10 ms idle */
+#define MMC_SDIO_AUTOSUSPEND_DELAY	10
 #define MMC_TIMEOUT_MS		20		/* 20 mSec */
 #define MMC_TIMEOUT_US		20000		/* 20000 micro Sec */
 #define OMAP_MMC_MIN_CLOCK	400000
@@ -1849,7 +1851,9 @@ static int omap_hsmmc_probe(struct platform_device *pdev)
 	device_init_wakeup(&pdev->dev, true);
 	pm_runtime_enable(host->dev);
 	pm_runtime_get_sync(host->dev);
-	pm_runtime_set_autosuspend_delay(host->dev, MMC_AUTOSUSPEND_DELAY);
+	/* A slot with an SDIO function in DT (WLAN) is woken by every beacon */
+	pm_runtime_set_autosuspend_delay(host->dev, of_get_child_count(pdev->dev.of_node) ?
+					 MMC_SDIO_AUTOSUSPEND_DELAY : MMC_AUTOSUSPEND_DELAY);
 	pm_runtime_use_autosuspend(host->dev);
 
 	omap_hsmmc_context_save(host);
