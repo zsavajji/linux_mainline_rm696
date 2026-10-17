@@ -21,7 +21,8 @@
  *
  */
 
-#include <linux/gpio.h>
+#include <linux/delay.h>
+#include <linux/etherdevice.h>
 
 #include "acx.h"
 #include "reg.h"
@@ -601,6 +602,62 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(wl1271_load_firmware);
+
+/*
+ * Nokia's driver never set a MAC address (it registered zeros, and 6.18's mac80211 won't bring an
+ * interface up without one). Take the one wlcore gave this chip: the fuse holds the BD_ADDR from
+ * PG 3.1 on, and the WLAN address is the next one. Powers the chip up and down again.
+ */
+int wl1271_boot_fuse_mac(struct wl1271 *wl, u8 *mac)
+{
+	struct wl1271_partition_set partition;
+	u32 mac1, mac2, oui, nic;
+	int ret;
+
+	msleep(WL1271_PRE_POWER_ON_SLEEP);
+	ret = wl1271_power_on(wl);
+	if (ret < 0)
+		return ret;
+	msleep(WL1271_POWER_ON_SLEEP);
+	wl1271_io_reset(wl);
+	wl1271_io_init(wl);
+
+	memset(&partition, 0, sizeof(partition));
+	partition.reg.start = REGISTERS_BASE;
+	partition.reg.size = REGISTERS_DOWN_SIZE;
+	wl1271_set_partition(wl, &partition);
+
+	/* ELP module wake up */
+	wl1271_raw_write32(wl, HW_ACCESS_ELP_CTRL_REG_ADDR, ELPCTRL_WAKE_UP);
+
+	wl1271_boot_hw_version(wl);
+	if ((wl->hw_pg_ver & 0x3) != 3 || ((wl->hw_pg_ver & 0xc) >> 2) < 1) {
+		wl1271_warning("no MAC address in the fuse of PG 0x%x", wl->hw_pg_ver);
+		ret = -ENOENT;
+		goto out;
+	}
+
+	wl1271_write32(wl, WELP_ARM_COMMAND, WELP_ARM_COMMAND_VAL);
+	msleep(500);
+
+	wl1271_set_partition(wl, &part_table[PART_DRPW]);
+	mac1 = wl1271_read32(wl, WL1271_REG_FUSE_BD_ADDR_1);
+	mac2 = wl1271_read32(wl, WL1271_REG_FUSE_BD_ADDR_2);
+
+	oui = ((mac2 & 0xffff) << 8) + ((mac1 & 0xff000000) >> 24);
+	nic = (mac1 + 1) & 0xffffff;
+	mac[0] = oui >> 16;
+	mac[1] = oui >> 8;
+	mac[2] = oui;
+	mac[3] = nic >> 16;
+	mac[4] = nic >> 8;
+	mac[5] = nic;
+	ret = is_valid_ether_addr(mac) ? 0 : -EINVAL;
+
+out:
+	wl1271_power_off(wl);
+	return ret;
+}
 
 int wl1271_boot(struct wl1271 *wl)
 {

@@ -2817,6 +2817,12 @@ int wl1271_register_hw(struct wl1271 *wl)
 	if (wl->mac80211_registered)
 		return 0;
 
+	if (is_zero_ether_addr(wl->mac_addr)) {
+		ret = wl1271_boot_fuse_mac(wl, wl->mac_addr);
+		if (ret < 0)
+			wl1271_warning("no MAC address: %d", ret);
+	}
+
 	SET_IEEE80211_PERM_ADDR(wl->hw, wl->mac_addr);
 
 	ret = ieee80211_register_hw(wl->hw);

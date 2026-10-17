@@ -27,6 +27,7 @@
 #include "wl12xx.h"
 
 int wl1271_boot(struct wl1271 *wl);
+int wl1271_boot_fuse_mac(struct wl1271 *wl, u8 *mac);
 int wl1271_load_firmware(struct wl1271 *wl);
 
 #define WL1271_NO_SUBBANDS 8

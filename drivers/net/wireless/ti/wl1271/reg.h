@@ -256,6 +256,10 @@
 #define PLL_PARAMETERS                 (REGISTERS_BASE + 0x6040)
 #define WU_COUNTER_PAUSE               (REGISTERS_BASE + 0x6008)
 #define WELP_ARM_COMMAND               (REGISTERS_BASE + 0x6100)
+
+/* the BD_ADDR in the chip's fuse (PG 3.1 on), as wlcore reads it */
+#define WL1271_REG_FUSE_BD_ADDR_1      (DRPW_BASE + 0x0eb4)
+#define WL1271_REG_FUSE_BD_ADDR_2      (DRPW_BASE + 0x0eb8)
 #define DRPW_SCRATCH_START             (DRPW_BASE + 0x002C)
 
 
