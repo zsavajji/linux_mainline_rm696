@@ -19,7 +19,9 @@
  * stopped by unknown error", the UI's wrong-charger note). Stock's kernel sent nothing else around
  * its USB events. So each change is announced once more after the burst, when BME's queue is empty.
  *
- * ponytail: "vac" is polled every 2 s instead of taken from the charger-detect interrupt.
+ * ponytail: "vac" is polled every 2 s instead of taken from the charger-detect interrupt. The poll
+ * is deferrable, so it never wakes the CPU by itself: it runs at the next wake-up, ~20 a second in
+ * standby (it was 0.5 of the standby wake-ups a second, each with a TWL I2C read; 2026-10-17).
  */
 #include <linux/module.h>
 #include <linux/of.h>
@@ -178,7 +180,7 @@ static int twl5031_bcc_probe(struct platform_device *pdev)
 		return PTR_ERR(bcc->vac);
 
 	platform_set_drvdata(pdev, bcc);
-	INIT_DELAYED_WORK(&bcc->work, twl5031_bcc_poll);
+	INIT_DEFERRABLE_WORK(&bcc->work, twl5031_bcc_poll);
 	INIT_DELAYED_WORK(&bcc->announce, twl5031_bcc_announce);
 
 	bcc->nb.notifier_call = twl5031_bcc_usb_event;
