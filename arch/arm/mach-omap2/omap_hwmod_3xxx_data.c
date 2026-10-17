@@ -265,14 +265,20 @@ static struct omap_hwmod omap3xxx_timer11_hwmod = {
 	.flags		= HWMOD_SET_DEFAULT_CLOCKACT,
 };
 
-/* I2C common */
+/*
+ * I2C common. No SYSS_HAS_RESET_STATUS: the I2C sets RESETDONE only once I2C_EN is set (as
+ * i2c-omap's reset says), so after a CORE OFF, which resets it, the hwmod's wait for it in
+ * _enable_sysc() ran its whole 10000 x udelay(1) timeout with IRQs off: 14 ms on the first
+ * access to each bus after every OFF (BME's and DSME's, 2026-10-17). The driver waits for it
+ * itself, with I2C_EN set, when it resets the controller.
+ */
 static struct omap_hwmod_class_sysconfig i2c_sysc = {
 	.rev_offs	= 0x00,
 	.sysc_offs	= 0x20,
 	.syss_offs	= 0x10,
 	.sysc_flags	= (SYSC_HAS_CLOCKACTIVITY | SYSC_HAS_SIDLEMODE |
 			   SYSC_HAS_ENAWAKEUP | SYSC_HAS_SOFTRESET |
-			   SYSC_HAS_AUTOIDLE | SYSS_HAS_RESET_STATUS),
+			   SYSC_HAS_AUTOIDLE),
 	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART),
 	.sysc_fields    = &omap_hwmod_sysc_type1,
 };
