@@ -23,13 +23,15 @@
 
 #include <linux/irq.h>
 #include <linux/module.h>
-#include <linux/crc7.h>
 #include <linux/vmalloc.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/mmc/card.h>
-#include <linux/gpio.h>
-#include <linux/wl12xx.h>
+#include <linux/mmc/host.h>
+#include <linux/of.h>
+#include <linux/of_irq.h>
+#include <linux/pm_runtime.h>
+#include "wl12xx_platform.h"
 
 #include "wl12xx.h"
 #include "wl12xx_80211.h"
@@ -157,27 +159,34 @@ static void wl1271_sdio_raw_write(struct wl1271 *wl, int addr, void *buf,
 	}
 }
 
+/*
+ * Nokia's mmc had sdio_claim_power()/sdio_release_power(); in 6.18 the card is powered through
+ * runtime PM on it (the host's vmmc, MMC_CAP_POWER_OFF_CARD), as wlcore's sdio glue does
+ */
 static int wl1271_sdio_set_power(struct wl1271 *wl, bool enable)
 {
 	struct sdio_func *func = wl_to_func(wl);
+	struct mmc_card *card = func->card;
+	int ret;
 
-	/* Let the SDIO stack handle wlan_enable control, so we
-	 * keep host claimed while wlan is in use to keep wl1271
-	 * alive.
-	 */
 	if (enable) {
-		sdio_claim_power(func);
+		ret = pm_runtime_resume_and_get(&card->dev);
+		if (ret < 0) {
+			wl1271_error("sdio power on failed: %d", ret);
+			return ret;
+		}
 
 		sdio_claim_host(func);
+		/* power cycle the card for sure, as the firmware download needs */
+		mmc_hw_reset(card);
 		sdio_enable_func(func);
 		sdio_release_host(func);
-
 	} else {
 		sdio_claim_host(func);
 		sdio_disable_func(func);
 		sdio_release_host(func);
 
-		sdio_release_power(func);
+		pm_runtime_put(&card->dev);
 	}
 
 	return 0;
@@ -194,11 +203,29 @@ static struct wl1271_if_operations sdio_ops = {
 	.disable_irq	= wl1271_sdio_disable_interrupts
 };
 
-static int __devinit wl1271_probe(struct sdio_func *func,
+/* the board's reference clock, as Nokia's board file gave it (ref-clock-frequency) */
+static int wl1271_sdio_ref_clock(struct device_node *np)
+{
+	u32 freq = 38400000;
+
+	of_property_read_u32(np, "ref-clock-frequency", &freq);
+	switch (freq) {
+	case 19200000:
+		return WL12XX_REFCLOCK_19;
+	case 26000000:
+		return WL12XX_REFCLOCK_26;
+	case 54000000:
+		return WL12XX_REFCLOCK_54;
+	default:
+		return WL12XX_REFCLOCK_38;
+	}
+}
+
+static int wl1271_probe(struct sdio_func *func,
 				  const struct sdio_device_id *id)
 {
 	struct ieee80211_hw *hw;
-	const struct wl12xx_platform_data *wlan_data;
+	struct device_node *np = func->dev.of_node;
 	struct wl1271 *wl;
 	int ret;
 
@@ -217,27 +244,25 @@ static int __devinit wl1271_probe(struct sdio_func *func,
 
 	/* Grab access to FN0 for ELP reg. */
 	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
+	/* Use block mode for transferring over one block size of data */
+	func->card->quirks |= MMC_QUIRK_BLKSZ_FOR_BYTE_MODE;
 
-	wlan_data = wl12xx_get_platform_data();
-	if (IS_ERR(wlan_data)) {
-		ret = PTR_ERR(wlan_data);
-		wl1271_error("missing wlan platform data: %d", ret);
+	/* the IRQ and the reference clock from the device tree's wlan node */
+	wl->irq = np ? irq_of_parse_and_map(np, 0) : 0;
+	if (!wl->irq) {
+		wl1271_error("no wlan interrupt in the device tree");
+		ret = -ENODEV;
 		goto out_free;
 	}
+	wl->ref_clock = wl1271_sdio_ref_clock(np);
 
-	wl->irq = wlan_data->irq;
-	wl->ref_clock = wlan_data->board_ref_clock;
-	wl->pdata = wlan_data;
-
-	ret = request_irq(wl->irq, wl1271_irq, 0, DRIVER_NAME, wl);
+	/* rising edge, as on stock (the IRQ work loops on the status the firmware keeps) */
+	ret = request_irq(wl->irq, wl1271_irq, IRQF_TRIGGER_RISING | IRQF_NO_AUTOEN,
+			  DRIVER_NAME, wl);
 	if (ret < 0) {
 		wl1271_error("request_irq() failed: %d", ret);
 		goto out_free;
 	}
-
-	set_irq_type(wl->irq, IRQ_TYPE_EDGE_RISING);
-
-	disable_irq(wl->irq);
 
 	ret = wl1271_init_ieee80211(wl);
 	if (ret)
@@ -248,6 +273,9 @@ static int __devinit wl1271_probe(struct sdio_func *func,
 		goto out_irq;
 
 	sdio_set_drvdata(func, wl);
+
+	/* the card stays off until the interface is up (set_power) */
+	pm_runtime_put_noidle(&func->dev);
 
 	wl1271_notice("initialized");
 
@@ -263,9 +291,12 @@ static int __devinit wl1271_probe(struct sdio_func *func,
 	return ret;
 }
 
-static void __devexit wl1271_remove(struct sdio_func *func)
+static void wl1271_remove(struct sdio_func *func)
 {
 	struct wl1271 *wl = sdio_get_drvdata(func);
+
+	/* undo the put_noidle of probe */
+	pm_runtime_get_noresume(&func->dev);
 
 	wl1271_unregister_hw(wl);
 	free_irq(wl->irq, wl);
@@ -276,7 +307,7 @@ static struct sdio_driver wl1271_sdio_driver = {
 	.name		= "wl1271_sdio",
 	.id_table	= wl1271_devices,
 	.probe		= wl1271_probe,
-	.remove		= __devexit_p(wl1271_remove),
+	.remove		= wl1271_remove,
 };
 
 static int __init wl1271_init(void)
@@ -304,6 +335,7 @@ module_init(wl1271_init);
 module_exit(wl1271_exit);
 
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Nokia N9 WL1273 (wl1271) driver, SDIO glue, for its 6.1 firmware");
 MODULE_AUTHOR("Luciano Coelho <luciano.coelho@nokia.com>");
 MODULE_AUTHOR("Juuso Oikarinen <juuso.oikarinen@nokia.com>");
 MODULE_FIRMWARE(WL1271_FW_NAME);

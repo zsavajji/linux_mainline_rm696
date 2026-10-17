@@ -23,8 +23,6 @@
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/crc7.h>
-#include <linux/spi/spi.h>
 #include <linux/etherdevice.h>
 #include <linux/ieee80211.h>
 
@@ -272,7 +270,7 @@ int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type)
 	join->bss_type = bss_type;
 	join->basic_rate_set = cpu_to_le32(wl->basic_rate_set);
 
-	if (wl->band == IEEE80211_BAND_5GHZ)
+	if (wl->band == NL80211_BAND_5GHZ)
 		join->bss_type |= WL1271_JOIN_CMD_BSS_TYPE_5GHZ;
 
 	join->beacon_interval = cpu_to_le16(wl->beacon_int);
@@ -528,7 +526,7 @@ int wl1271_cmd_build_null_data(struct wl1271 *wl)
 		size = sizeof(struct wl12xx_null_data_template);
 		ptr = NULL;
 	} else {
-		skb = ieee80211_nullfunc_get(wl->hw, wl->vif);
+		skb = ieee80211_nullfunc_get(wl->hw, wl->vif, -1, false);
 		if (!skb)
 			goto out;
 		size = skb->len;
@@ -552,7 +550,7 @@ int wl1271_cmd_build_klv_null_data(struct wl1271 *wl)
 	struct sk_buff *skb = NULL;
 	int ret = -ENOMEM;
 
-	skb = ieee80211_nullfunc_get(wl->hw, wl->vif);
+	skb = ieee80211_nullfunc_get(wl->hw, wl->vif, -1, false);
 	if (!skb)
 		goto out;
 
@@ -587,23 +585,27 @@ out:
 	return ret;
 }
 
+/* 6.18's hw_scan gives the IEs split: this band's, then the common ones */
 int wl1271_cmd_build_probe_req(struct wl1271 *wl,
 			       const u8 *ssid, size_t ssid_len,
-			       const u8 *ie, size_t ie_len, u8 band)
+			       const u8 *ie, size_t ie_len,
+			       const u8 *common_ie, size_t common_ie_len, u8 band)
 {
 	struct sk_buff *skb;
 	int ret;
 
-	skb = ieee80211_probereq_get(wl->hw, wl->vif, ssid, ssid_len,
-				     ie, ie_len);
+	skb = ieee80211_probereq_get(wl->hw, wl->vif->addr, ssid, ssid_len,
+				     ie_len + common_ie_len);
 	if (!skb) {
 		ret = -ENOMEM;
 		goto out;
 	}
+	skb_put_data(skb, ie, ie_len);
+	skb_put_data(skb, common_ie, common_ie_len);
 
 	wl1271_dump(DEBUG_SCAN, "PROBE REQ: ", skb->data, skb->len);
 
-	if (band == IEEE80211_BAND_2GHZ)
+	if (band == NL80211_BAND_2GHZ)
 		ret = wl1271_cmd_template_set(wl, CMD_TEMPL_CFG_PROBE_REQ_2_4,
 					      skb->data, skb->len, 0,
 					      wl->conf.tx.basic_rate);
@@ -629,7 +631,7 @@ struct sk_buff *wl1271_cmd_build_ap_probe_req(struct wl1271 *wl,
 
 	wl1271_dump(DEBUG_SCAN, "AP PROBE REQ: ", skb->data, skb->len);
 
-	if (wl->band == IEEE80211_BAND_2GHZ)
+	if (wl->band == NL80211_BAND_2GHZ)
 		ret = wl1271_cmd_template_set(wl, CMD_TEMPL_CFG_PROBE_REQ_2_4,
 					      skb->data, skb->len, 0,
 					      wl->conf.tx.basic_rate);

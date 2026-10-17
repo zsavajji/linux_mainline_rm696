@@ -23,7 +23,7 @@
 
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
-#include <linux/wl12xx.h>
+#include "wl12xx_platform.h"
 #include "reg.h"
 #include "ps.h"
 #include "io.h"

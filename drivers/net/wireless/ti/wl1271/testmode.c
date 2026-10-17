@@ -54,7 +54,7 @@ enum wl1271_tm_attrs {
 };
 #define WL1271_TM_ATTR_MAX (__WL1271_TM_ATTR_AFTER_LAST - 1)
 
-static struct nla_policy wl1271_tm_policy[WL1271_TM_ATTR_MAX + 1] = {
+static const struct nla_policy wl1271_tm_policy[WL1271_TM_ATTR_MAX + 1] = {
 	[WL1271_TM_ATTR_CMD_ID] =	{ .type = NLA_U32 },
 	[WL1271_TM_ATTR_ANSWER] =	{ .type = NLA_U8 },
 	[WL1271_TM_ATTR_DATA] =		{ .type = NLA_BINARY,
@@ -100,17 +100,16 @@ static int wl1271_tm_cmd_test(struct wl1271 *wl, struct nlattr *tb[])
 		if (!skb)
 			return -ENOMEM;
 
-		NLA_PUT(skb, WL1271_TM_ATTR_DATA, buf_len, buf);
+		if (nla_put(skb, WL1271_TM_ATTR_DATA, buf_len, buf)) {
+			kfree_skb(skb);
+			return -EMSGSIZE;
+		}
 		ret = cfg80211_testmode_reply(skb);
 		if (ret < 0)
 			return ret;
 	}
 
 	return 0;
-
-nla_put_failure:
-	kfree_skb(skb);
-	return -EMSGSIZE;
 }
 
 static int wl1271_tm_cmd_interrogate(struct wl1271 *wl, struct nlattr *tb[])
@@ -137,20 +136,26 @@ static int wl1271_tm_cmd_interrogate(struct wl1271 *wl, struct nlattr *tb[])
 
 	if (ret < 0) {
 		wl1271_warning("testmode cmd interrogate failed: %d", ret);
-		return ret;
+		goto out;
 	}
 
-	skb = cfg80211_testmode_alloc_reply_skb(wl->hw->wiphy, sizeof(*cmd));
-	if (!skb)
-		return -ENOMEM;
+	/* (the original never sent this reply and leaked cmd) */
+	skb = cfg80211_testmode_alloc_reply_skb(wl->hw->wiphy,
+						nla_total_size(sizeof(*cmd)));
+	if (!skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-	NLA_PUT(skb, WL1271_TM_ATTR_DATA, sizeof(*cmd), cmd);
-
-	return 0;
-
-nla_put_failure:
-	kfree_skb(skb);
-	return -EMSGSIZE;
+	if (nla_put(skb, WL1271_TM_ATTR_DATA, sizeof(*cmd), cmd)) {
+		kfree_skb(skb);
+		ret = -EMSGSIZE;
+		goto out;
+	}
+	ret = cfg80211_testmode_reply(skb);
+out:
+	kfree(cmd);
+	return ret;
 }
 
 static int wl1271_tm_cmd_configure(struct wl1271 *wl, struct nlattr *tb[])
@@ -260,13 +265,15 @@ static int wl1271_tm_cmd_recover(struct wl1271 *wl, struct nlattr *tb[])
 	return 0;
 }
 
-int wl1271_tm_cmd(struct ieee80211_hw *hw, void *data, int len)
+int wl1271_tm_cmd(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+		  void *data, int len)
 {
 	struct wl1271 *wl = hw->priv;
 	struct nlattr *tb[WL1271_TM_ATTR_MAX + 1];
 	int err;
 
-	err = nla_parse(tb, WL1271_TM_ATTR_MAX, data, len, wl1271_tm_policy);
+	err = nla_parse_deprecated(tb, WL1271_TM_ATTR_MAX, data, len,
+				   wl1271_tm_policy, NULL);
 	if (err)
 		return err;
 

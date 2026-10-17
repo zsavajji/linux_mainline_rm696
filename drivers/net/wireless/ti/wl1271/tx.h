@@ -56,6 +56,13 @@
 			     ~(WL1271_TX_ALIGN_TO - 1))
 #define WL1271_TKIP_IV_SPACE 4
 
+/*
+ * 6.18 hands the destination station to op_tx only. Whether there is one (the AP: AP rate
+ * policy) rides to tx_fill_hdr in the rate slot mac80211 leaves to drivers with their own
+ * rate control (HAS_RATE_CONTROL: mac80211 zeroes it and never fills it)
+ */
+#define wl1271_tx_to_sta(info) ((info)->control.rates[0].idx)
+
 struct wl1271_tx_hw_descr {
 	/* Length of packet in words, including descriptor+header+data */
 	__le16 length;
@@ -144,7 +151,7 @@ void wl1271_tx_work_locked(struct wl1271 *wl);
 void wl1271_tx_complete(struct wl1271 *wl);
 void wl1271_tx_reset(struct wl1271 *wl);
 void wl1271_tx_flush(struct wl1271 *wl);
-u8 wl1271_rate_to_idx(int rate, enum ieee80211_band band);
+u8 wl1271_rate_to_idx(int rate, enum nl80211_band band);
 u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set);
 
 #endif

@@ -97,9 +97,8 @@ static int wl1271_tx_allocate(struct wl1271 *wl, struct sk_buff *skb, u32 extra,
 static void wl1271_tx_fill_hdr(struct wl1271 *wl, struct sk_buff *skb,
 			      u32 extra, struct ieee80211_tx_info *control)
 {
-	struct timespec ts;
 	struct wl1271_tx_hw_descr *desc;
-	int pad, ac;
+	int pad;
 	s64 hosttime;
 	u16 tx_attr;
 
@@ -114,8 +113,7 @@ static void wl1271_tx_fill_hdr(struct wl1271 *wl, struct sk_buff *skb,
 	}
 
 	/* configure packet life time */
-	getnstimeofday(&ts);
-	hosttime = (timespec_to_ns(&ts) >> 10);
+	hosttime = ktime_get_ns() >> 10;
 	desc->start_time = cpu_to_le32(hosttime - wl->time_offset);
 	desc->life_time = cpu_to_le16(TX_HW_MGMT_PKT_LIFETIME_TU);
 
@@ -137,7 +135,7 @@ static void wl1271_tx_fill_hdr(struct wl1271 *wl, struct sk_buff *skb,
 
 	/* if the packets are destined for AP (have a STA entry) send them
 	   with AP rate policies, otherwise use default basic rates */
-	if (control->control.sta)
+	if (wl1271_tx_to_sta(control))
 		tx_attr |= ACX_TX_AP_FULL_RATE << TX_HW_ATTR_OFST_RATE_POLICY;
 
 	desc->tx_attr = cpu_to_le16(tx_attr);
@@ -207,7 +205,6 @@ u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set)
 		rate_set >>= 1;
 	}
 
-#ifdef CONFIG_WL12XX_HT
 	/* MCS rates indication are on bits 16 - 23 */
 	rate_set >>= HW_HT_RATES_OFFSET - band->n_bitrates;
 
@@ -216,7 +213,6 @@ u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set)
 			enabled_rates |= (CONF_HW_BIT_RATE_MCS_0 << bit);
 		rate_set >>= 1;
 	}
-#endif
 
 	return enabled_rates;
 }
@@ -399,7 +395,9 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 
 	info->status.rates[0].idx = rate;
 	info->status.rates[0].count = retries;
-	info->status.rates[0].flags = 0;
+	info->status.rates[0].flags =
+		rate >= 0 && result->rate_class_index <= CONF_HW_RXTX_RATE_MCS0 ?
+		IEEE80211_TX_RC_MCS : 0;
 	info->status.ack_signal = -1;
 
 	wl->stats.retry_count += result->ack_failures;
@@ -426,7 +424,7 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 		     result->rate_class_index, result->status);
 
 	/* return the packet to the stack */
-	ieee80211_tx_status(wl->hw, skb);
+	ieee80211_tx_status_skb(wl->hw, skb);
 	wl1271_free_tx_id(wl, result->id);
 }
 
@@ -478,7 +476,7 @@ void wl1271_tx_reset(struct wl1271 *wl)
 	for (i = 0; i < NUM_TX_QUEUES; i++) {
 		while ((skb = skb_dequeue(&wl->tx_queue[i]))) {
 			wl1271_debug(DEBUG_TX, "freeing skb 0x%p", skb);
-			ieee80211_tx_status(wl->hw, skb);
+			ieee80211_tx_status_skb(wl->hw, skb);
 		}
 	}
 	wl->tx_queue_count = 0;
@@ -494,7 +492,7 @@ void wl1271_tx_reset(struct wl1271 *wl)
 			skb = wl->tx_frames[i];
 			wl1271_free_tx_id(wl, i);
 			wl1271_debug(DEBUG_TX, "freeing skb 0x%p", skb);
-			ieee80211_tx_status(wl->hw, skb);
+			ieee80211_tx_status_skb(wl->hw, skb);
 		}
 }
 

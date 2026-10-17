@@ -309,10 +309,11 @@ struct wl1271_rx_mem_pool_addr {
 
 struct wl1271_scan {
 	struct cfg80211_scan_request *req;
+	struct ieee80211_scan_ies *ies;
 	bool *scanned_ch;
 	bool failed;
 	u8 state;
-	u8 ssid[IW_ESSID_MAX_SIZE+1];
+	u8 ssid[IEEE80211_MAX_SSID_LEN+1];
 	size_t ssid_len;
 };
 
@@ -365,6 +366,10 @@ struct wl1271 {
 #define WL1271_FLAG_FW_TX_BUSY        (14)
 #define WL1271_FLAG_NO_HT_BA          (15)
 #define WL1271_FLAG_IF_INITIALIZED    (16)
+/* the firmware senses BT (soft gemini): stay in PSM (was Nokia's ieee80211_disable_dyn_ps) */
+#define WL1271_FLAG_SG_FORCE_PSM      (17)
+/* left idle (dummy join) for a hw scan, which 6.18 runs idle (2.6.3x didn't) */
+#define WL1271_FLAG_SCAN_UNIDLED      (18)
 	unsigned long flags;
 
 	struct wl1271_partition_set part;
@@ -385,7 +390,7 @@ struct wl1271 {
 	u8 mac_addr[ETH_ALEN];
 	u8 bss_type;
 	u8 set_bss_type;
-	u8 ssid[IW_ESSID_MAX_SIZE + 1];
+	u8 ssid[IEEE80211_MAX_SSID_LEN + 1];
 	u8 ssid_len;
 	int channel;
 
@@ -464,7 +469,7 @@ struct wl1271 {
 	u32 rate_set;
 
 	/* The current band */
-	enum ieee80211_band band;
+	enum nl80211_band band;
 
 	/* Beaconing interval (needed for ad-hoc) */
 	u32 beacon_int;
@@ -517,17 +522,12 @@ struct wl1271 {
 	bool ba_support;
 	u8 ba_rx_bitmap;
 
-	struct {
-		enum ieee80211_ampdu_mlme_action action;
-		u16 tid;
-		u16 *ssn;
-	} ba;
-	struct work_struct ampdu_action_work;
 
 	bool no_adhoc;
 };
 
 int wl1271_plt_start(struct wl1271 *wl);
+int wl1271_handle_idle(struct wl1271 *wl, bool idle);
 int wl1271_plt_stop(struct wl1271 *wl);
 
 #define JOIN_TIMEOUT 5000 /* 5000 milliseconds to join */

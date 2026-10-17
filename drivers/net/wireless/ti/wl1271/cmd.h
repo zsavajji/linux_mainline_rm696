@@ -48,7 +48,8 @@ int wl1271_cmd_build_null_data(struct wl1271 *wl);
 int wl1271_cmd_build_ps_poll(struct wl1271 *wl, u16 aid);
 int wl1271_cmd_build_probe_req(struct wl1271 *wl,
 			       const u8 *ssid, size_t ssid_len,
-			       const u8 *ie, size_t ie_len, u8 band);
+			       const u8 *ie, size_t ie_len,
+			       const u8 *common_ie, size_t common_ie_len, u8 band);
 struct sk_buff *wl1271_cmd_build_ap_probe_req(struct wl1271 *wl,
 					      struct sk_buff *skb);
 int wl1271_build_qos_null_data(struct wl1271 *wl);
@@ -206,7 +207,7 @@ struct wl1271_cmd_join {
 	u8 bss_type;
 	u8 channel;
 	u8 ssid_len;
-	u8 ssid[IW_ESSID_MAX_SIZE];
+	u8 ssid[IEEE80211_MAX_SSID_LEN];
 	u8 ctrl; /* JOIN_CMD_CTRL_* */
 	u8 reserved[3];
 } __attribute__ ((packed));

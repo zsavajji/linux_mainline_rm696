@@ -59,9 +59,18 @@ void wl1271_scan_complete_work(struct work_struct *work)
 		wl1271_info("Scan completed due to error.");
 		ieee80211_queue_work(wl->hw, &wl->recovery_work);
 	}
+
+	/* back to idle if the scan left it and mac80211 still is (see op_hw_scan) */
+	if (test_and_clear_bit(WL1271_FLAG_SCAN_UNIDLED, &wl->flags) &&
+	    (wl->hw->conf.flags & IEEE80211_CONF_IDLE) &&
+	    wl->state == WL1271_STATE_ON &&
+	    wl1271_ps_elp_wakeup(wl, false) == 0) {
+		wl1271_handle_idle(wl, true);
+		wl1271_ps_elp_sleep(wl);
+	}
 	mutex_unlock(&wl->mutex);
 
-	ieee80211_scan_completed(wl->hw, false);
+	ieee80211_scan_completed(wl->hw, &(struct cfg80211_scan_info) { });
 }
 
 void wl1271_scan_work(struct work_struct *work)
@@ -94,7 +103,7 @@ out:
 static int wl1271_get_scan_channels(struct wl1271 *wl,
 				    struct cfg80211_scan_request *req,
 				    struct basic_scan_channel_params *channels,
-				    enum ieee80211_band band, bool passive)
+				    enum nl80211_band band, bool passive)
 {
 	struct conf_scan_settings *c = &wl->conf.scan;
 	int i, j;
@@ -108,7 +117,7 @@ static int wl1271_get_scan_channels(struct wl1271 *wl,
 
 		if (!wl->scan.scanned_ch[i] &&
 		    !(flags & IEEE80211_CHAN_DISABLED) &&
-		    ((!!(flags & IEEE80211_CHAN_PASSIVE_SCAN)) == passive) &&
+		    ((!!(flags & IEEE80211_CHAN_NO_IR)) == passive) &&
 		    (req->channels[i]->band == band)) {
 
 			wl1271_debug(DEBUG_SCAN, "band %d, center_freq %d ",
@@ -154,7 +163,7 @@ static int wl1271_get_scan_channels(struct wl1271 *wl,
 
 #define WL1271_NOTHING_TO_SCAN 1
 
-static int wl1271_scan_send(struct wl1271 *wl, enum ieee80211_band band,
+static int wl1271_scan_send(struct wl1271 *wl, enum nl80211_band band,
 			     bool passive, u32 basic_rate)
 {
 	struct wl1271_cmd_scan *cmd;
@@ -196,19 +205,21 @@ static int wl1271_scan_send(struct wl1271 *wl, enum ieee80211_band band,
 	cmd->params.tid_trigger = 0;
 	cmd->params.scan_tag = WL1271_SCAN_DEFAULT_TAG;
 
-	if (band == IEEE80211_BAND_2GHZ)
+	if (band == NL80211_BAND_2GHZ)
 		cmd->params.band = WL1271_SCAN_BAND_2_4_GHZ;
 	else
 		cmd->params.band = WL1271_SCAN_BAND_5_GHZ;
 
-	if (wl->scan.ssid_len && wl->scan.ssid) {
+	if (wl->scan.ssid_len) {
 		cmd->params.ssid_len = wl->scan.ssid_len;
 		memcpy(cmd->params.ssid, wl->scan.ssid, wl->scan.ssid_len);
 	}
 
 	ret = wl1271_cmd_build_probe_req(wl, wl->scan.ssid, wl->scan.ssid_len,
-					 wl->scan.req->ie, wl->scan.req->ie_len,
-					 band);
+					 wl->scan.ies->ies[band],
+					 wl->scan.ies->len[band],
+					 wl->scan.ies->common_ies,
+					 wl->scan.ies->common_ie_len, band);
 	if (ret < 0) {
 		wl1271_error("PROBE request template failed");
 		goto out;
@@ -246,7 +257,7 @@ void wl1271_scan_stm(struct wl1271 *wl)
 		break;
 
 	case WL1271_SCAN_STATE_2GHZ_ACTIVE:
-		ret = wl1271_scan_send(wl, IEEE80211_BAND_2GHZ, false,
+		ret = wl1271_scan_send(wl, NL80211_BAND_2GHZ, false,
 				       wl->conf.tx.basic_rate);
 		if (ret == WL1271_NOTHING_TO_SCAN) {
 			wl->scan.state = WL1271_SCAN_STATE_2GHZ_PASSIVE;
@@ -256,7 +267,7 @@ void wl1271_scan_stm(struct wl1271 *wl)
 		break;
 
 	case WL1271_SCAN_STATE_2GHZ_PASSIVE:
-		ret = wl1271_scan_send(wl, IEEE80211_BAND_2GHZ, true,
+		ret = wl1271_scan_send(wl, NL80211_BAND_2GHZ, true,
 				       wl->conf.tx.basic_rate);
 		if (ret == WL1271_NOTHING_TO_SCAN) {
 			if (wl->enable_11a)
@@ -269,7 +280,7 @@ void wl1271_scan_stm(struct wl1271 *wl)
 		break;
 
 	case WL1271_SCAN_STATE_5GHZ_ACTIVE:
-		ret = wl1271_scan_send(wl, IEEE80211_BAND_5GHZ, false,
+		ret = wl1271_scan_send(wl, NL80211_BAND_5GHZ, false,
 				       wl->conf.tx.basic_rate_5);
 		if (ret == WL1271_NOTHING_TO_SCAN) {
 			wl->scan.state = WL1271_SCAN_STATE_5GHZ_PASSIVE;
@@ -279,7 +290,7 @@ void wl1271_scan_stm(struct wl1271 *wl)
 		break;
 
 	case WL1271_SCAN_STATE_5GHZ_PASSIVE:
-		ret = wl1271_scan_send(wl, IEEE80211_BAND_5GHZ, true,
+		ret = wl1271_scan_send(wl, NL80211_BAND_5GHZ, true,
 				       wl->conf.tx.basic_rate_5);
 		if (ret == WL1271_NOTHING_TO_SCAN) {
 			wl->scan.state = WL1271_SCAN_STATE_DONE;
@@ -308,7 +319,7 @@ void wl1271_scan_stm(struct wl1271 *wl)
 }
 
 int wl1271_scan(struct wl1271 *wl, const u8 *ssid, size_t ssid_len,
-		struct cfg80211_scan_request *req)
+		struct cfg80211_scan_request *req, struct ieee80211_scan_ies *ies)
 {
 	if (wl->scan.state != WL1271_SCAN_STATE_IDLE)
 		return -EBUSY;
@@ -323,6 +334,7 @@ int wl1271_scan(struct wl1271 *wl, const u8 *ssid, size_t ssid_len,
 	}
 
 	wl->scan.req = req;
+	wl->scan.ies = ies;
 
 	wl->scan.scanned_ch = kcalloc(req->n_channels,
 				      sizeof(*wl->scan.scanned_ch),

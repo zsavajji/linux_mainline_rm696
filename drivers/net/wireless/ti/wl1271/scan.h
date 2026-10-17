@@ -27,7 +27,7 @@
 #include "wl12xx.h"
 
 int wl1271_scan(struct wl1271 *wl, const u8 *ssid, size_t ssid_len,
-		struct cfg80211_scan_request *req);
+		struct cfg80211_scan_request *req, struct ieee80211_scan_ies *ies);
 int wl1271_scan_build_probe_req(struct wl1271 *wl,
 				const u8 *ssid, size_t ssid_len,
 				const u8 *ie, size_t ie_len, u8 band);
@@ -71,7 +71,7 @@ struct basic_scan_params {
 	u8 ssid_len;
 	/* in order to align */
 	u8 padding1[2];
-	u8 ssid[IW_ESSID_MAX_SIZE];
+	u8 ssid[IEEE80211_MAX_SSID_LEN];
 	/* Band to scan */
 	u8 band;
 	u8 use_ssid_list;

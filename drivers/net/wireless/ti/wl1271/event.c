@@ -170,7 +170,7 @@ static void wl1271_event_rssi_trigger(struct wl1271 *wl,
 		event = NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH;
 
 	if (event != wl->last_rssi_event)
-		ieee80211_cqm_rssi_notify(wl->vif, event, GFP_KERNEL);
+		ieee80211_cqm_rssi_notify(wl->vif, event, metric, GFP_KERNEL);
 	wl->last_rssi_event = event;
 }
 
@@ -218,13 +218,21 @@ static int wl1271_event_process(struct wl1271 *wl, struct event_mailbox *mbox)
 		}
 	}
 
-	/* disable dynamic PS when requested by the firmware */
+	/*
+	 * Stay in PSM while the firmware senses BT, as requested (Nokia's mac80211 had
+	 * ieee80211_disable_dyn_ps() for this; 6.18 has none, so op_config skips leaving PSM)
+	 */
 	if (vector & SOFT_GEMINI_SENSE_EVENT_ID &&
 	    wl->bss_type == BSS_TYPE_STA_BSS) {
-		if (mbox->soft_gemini_sense_info)
-			ieee80211_disable_dyn_ps(wl->vif);
-		else
-			ieee80211_enable_dyn_ps(wl->vif);
+		if (mbox->soft_gemini_sense_info) {
+			set_bit(WL1271_FLAG_SG_FORCE_PSM, &wl->flags);
+		} else if (test_and_clear_bit(WL1271_FLAG_SG_FORCE_PSM, &wl->flags) &&
+			   !test_bit(WL1271_FLAG_PSM_REQUESTED, &wl->flags) &&
+			   test_bit(WL1271_FLAG_PSM, &wl->flags)) {
+			/* mac80211 asked for active mode meanwhile */
+			wl1271_ps_set_mode(wl, STATION_ACTIVE_MODE,
+					   wl->basic_rate, true);
+		}
 	}
 
 	/*

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config WL1271_NOKIA
+	tristate "TI wl1271/wl1273 with Nokia's 6.1 firmware (Nokia N9)"
+	depends on MAC80211 && WLCORE=n
+	select FW_LOADER
+	help
+	  Nokia's N9 driver for its TI WL1273 (the 2.6.37/38 wl12xx with Nokia's
+	  changes), ported: it runs the N9's own firmware (/lib/firmware/wl1271-fw.bin,
+	  6.1.1.39.339) and takes Harmattan's NVS push. wlcore can't drive that
+	  firmware, and linux-firmware's for wlcore idles far higher on 5 GHz.
+
+	  The module is called wl12xx, as on the N9.
+
+config WL1271_NOKIA_SDIO
+	tristate "Nokia N9 WL1273 on SDIO"
+	depends on WL1271_NOKIA && MMC
+	help
+	  The SDIO glue of WL1271_NOKIA. The module is called wl12xx_sdio, as on the N9.
