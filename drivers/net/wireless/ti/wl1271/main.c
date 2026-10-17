@@ -287,7 +287,8 @@ static LIST_HEAD(wl_list);
 static int wl1271_dev_notify(struct notifier_block *me, unsigned long what,
 			     void *arg)
 {
-	struct net_device *dev = arg;
+	/* (since 3.11 the argument is the notifier info, not the net_device) */
+	struct net_device *dev = netdev_notifier_info_to_dev(arg);
 	struct wireless_dev *wdev;
 	struct wiphy *wiphy;
 	struct ieee80211_hw *hw;
