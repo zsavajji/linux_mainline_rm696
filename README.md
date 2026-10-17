@@ -11,8 +11,9 @@ The configuration is `omap2plus_defconfig` with `arch/arm/configs/rm696.config` 
 ## Building
 
 A bootable N9 image needs more than this tree: the SGX GPU driver
-([pvr_sgx_rm696](https://github.com/zsavajji/pvr_sgx_rm696), built against it as external modules), WLAN
-firmware and the initramfs. The build kit, [rm696_mainline_port](https://github.com/zsavajji/rm696_mainline_port), builds
+([pvr_sgx_rm696](https://github.com/zsavajji/pvr_sgx_rm696), built against it as external modules), the
+regulatory database and the initramfs (the WLAN chip runs Nokia's driver, `drivers/net/wireless/ti/wl1271`,
+with stock's firmware from the phone). The build kit, [rm696_mainline_port](https://github.com/zsavajji/rm696_mainline_port), builds
 all of it into one file NOLO boots:
 
 ```sh
