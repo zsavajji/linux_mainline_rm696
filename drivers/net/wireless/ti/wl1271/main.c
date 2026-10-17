@@ -1289,6 +1289,7 @@ out:
  */
 static int wl1271_set_assoc(struct wl1271 *wl)
 {
+	struct wireless_dev *wdev;
 	int ret;
 
 	ret = wl1271_acx_keep_alive_mode(wl, true);
@@ -1303,8 +1304,23 @@ static int wl1271_set_assoc(struct wl1271 *wl)
 	if (ret < 0)
 		return ret;
 
-	return wl1271_acx_keep_alive_config(wl, CMD_TEMPL_KLV_IDX_NULL_DATA,
-					    ACX_KEEP_ALIVE_TPL_VALID);
+	ret = wl1271_acx_keep_alive_config(wl, CMD_TEMPL_KLV_IDX_NULL_DATA,
+					   ACX_KEEP_ALIVE_TPL_VALID);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * In 6.18 wlan0 can go up before mac80211 reports the association here, and the netdev
+	 * notifier then found it unassociated: tell the firmware (BT coexistence) now
+	 */
+	wdev = ieee80211_vif_to_wdev(wl->vif);
+	if (wdev && wdev->netdev && READ_ONCE(wdev->netdev->operstate) == IF_OPER_UP &&
+	    !test_and_set_bit(WL1271_FLAG_STA_STATE_SENT, &wl->flags)) {
+		wl1271_cmd_set_sta_state(wl);
+		wl1271_info("Association completed.");
+	}
+
+	return 0;
 }
 
 static int wl1271_join(struct wl1271 *wl, bool set_assoc)
