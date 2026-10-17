@@ -1282,6 +1282,31 @@ out:
 	return ret;
 }
 
+/*
+ * The part of a join that needs the association: the join command disables the keep-alive mode,
+ * shuts down its process and clears the template config, so set it all again. The acx_aid starts
+ * the keep-alive process, and the order of the commands below is relevant.
+ */
+static int wl1271_set_assoc(struct wl1271 *wl)
+{
+	int ret;
+
+	ret = wl1271_acx_keep_alive_mode(wl, true);
+	if (ret < 0)
+		return ret;
+
+	ret = wl1271_acx_aid(wl, wl->aid);
+	if (ret < 0)
+		return ret;
+
+	ret = wl1271_cmd_build_klv_null_data(wl);
+	if (ret < 0)
+		return ret;
+
+	return wl1271_acx_keep_alive_config(wl, CMD_TEMPL_KLV_IDX_NULL_DATA,
+					    ACX_KEEP_ALIVE_TPL_VALID);
+}
+
 static int wl1271_join(struct wl1271 *wl, bool set_assoc)
 {
 	int ret;
@@ -1307,31 +1332,8 @@ static int wl1271_join(struct wl1271 *wl, bool set_assoc)
 
 	set_bit(WL1271_FLAG_JOINED, &wl->flags);
 
-	if (!test_bit(WL1271_FLAG_STA_ASSOCIATED, &wl->flags))
-		goto out;
-
-	/*
-	 * The join command disable the keep-alive mode, shut down its process,
-	 * and also clear the template config, so we need to reset it all after
-	 * the join. The acx_aid starts the keep-alive process, and the order
-	 * of the commands below is relevant.
-	 */
-	ret = wl1271_acx_keep_alive_mode(wl, true);
-	if (ret < 0)
-		goto out;
-
-	ret = wl1271_acx_aid(wl, wl->aid);
-	if (ret < 0)
-		goto out;
-
-	ret = wl1271_cmd_build_klv_null_data(wl);
-	if (ret < 0)
-		goto out;
-
-	ret = wl1271_acx_keep_alive_config(wl, CMD_TEMPL_KLV_IDX_NULL_DATA,
-					   ACX_KEEP_ALIVE_TPL_VALID);
-	if (ret < 0)
-		goto out;
+	if (test_bit(WL1271_FLAG_STA_ASSOCIATED, &wl->flags))
+		ret = wl1271_set_assoc(wl);
 
 out:
 	return ret;
@@ -2180,6 +2182,18 @@ static void wl1271_op_bss_info_changed(struct ieee80211_hw *hw,
 		ret = wl1271_join(wl, set_assoc);
 		if (ret < 0) {
 			wl1271_warning("cmd join failed %d", ret);
+			goto out_sleep;
+		}
+	} else if (set_assoc) {
+		/*
+		 * 2.6.3x reported the BSSID and the association together, and the join above set
+		 * the association up. 6.18 gives the BSSID (the join) at authentication and the
+		 * association alone, so set it up here: without it, PSM is never entered.
+		 */
+		set_bit(WL1271_FLAG_STA_ASSOCIATED, &wl->flags);
+		ret = wl1271_set_assoc(wl);
+		if (ret < 0) {
+			wl1271_warning("association setup failed %d", ret);
 			goto out_sleep;
 		}
 	}
