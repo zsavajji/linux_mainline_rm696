@@ -278,8 +278,17 @@ static int wl1271_event_process(struct wl1271 *wl, struct event_mailbox *mbox)
 			wl1271_event_ba(wl);
 	}
 
-	if (wl->vif && beacon_loss)
-		ieee80211_connection_loss(wl->vif);
+	/*
+	 * Let mac80211 probe the AP before it disconnects: in a busy channel
+	 * the firmware's 10 missed beacons or unacked PSM nullfuncs are often
+	 * the AP still being there (Nokia's driver disconnected right away)
+	 */
+	if (wl->vif && beacon_loss) {
+		if (wl->scan.state != WL1271_SCAN_STATE_IDLE)
+			set_bit(WL1271_FLAG_LOSS_PENDING, &wl->flags);
+		else
+			ieee80211_beacon_loss(wl->vif);
+	}
 
 	return 0;
 }

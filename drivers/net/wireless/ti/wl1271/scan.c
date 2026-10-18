@@ -33,6 +33,7 @@ void wl1271_scan_complete_work(struct work_struct *work)
 {
 	struct delayed_work *dwork;
 	struct wl1271 *wl;
+	struct ieee80211_vif *lost = NULL;
 
 	dwork = container_of(work, struct delayed_work, work);
 	wl = container_of(dwork, struct wl1271, scan_complete_work);
@@ -68,9 +69,17 @@ void wl1271_scan_complete_work(struct work_struct *work)
 		wl1271_handle_idle(wl, true);
 		wl1271_ps_elp_sleep(wl);
 	}
+
+	if (test_and_clear_bit(WL1271_FLAG_LOSS_PENDING, &wl->flags) &&
+	    test_bit(WL1271_FLAG_STA_ASSOCIATED, &wl->flags))
+		lost = wl->vif;
 	mutex_unlock(&wl->mutex);
 
 	ieee80211_scan_completed(wl->hw, &(struct cfg80211_scan_info) { });
+
+	/* after scan_completed: its scan_work runs first and clears local->scanning */
+	if (lost)
+		ieee80211_beacon_loss(lost);
 }
 
 void wl1271_scan_work(struct work_struct *work)

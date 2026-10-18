@@ -370,6 +370,8 @@ struct wl1271 {
 #define WL1271_FLAG_SG_FORCE_PSM      (17)
 /* left idle (dummy join) for a hw scan, which 6.18 runs idle (2.6.3x didn't) */
 #define WL1271_FLAG_SCAN_UNIDLED      (18)
+/* beacon loss during a hw scan, which mac80211 doesn't probe: reported when the scan ends */
+#define WL1271_FLAG_LOSS_PENDING      (19)
 	unsigned long flags;
 
 	struct wl1271_partition_set part;
