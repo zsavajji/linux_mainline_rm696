@@ -265,8 +265,12 @@ int pn_skb_send(struct sock *sk, struct sk_buff *skb,
 	else if (phonet_address_lookup(net, daddr) == 0) {
 		dev = phonet_device_get(net);
 		skb->pkt_type = PACKET_LOOPBACK;
-	} else if (dst == 0) {
-		/* Resource routing (small race until phonet_rcv()) */
+	} else if (dst == 0 && res != PN_COMMGR) {
+		/*
+		 * Resource routing (small race until phonet_rcv()). Not for the
+		 * communication manager: a subscription is for the modem's, while
+		 * Harmattan's sscd binds PN_COMMGR on its own side and never reads it.
+		 */
 		struct sock *sk = pn_find_sock_by_res(net, res);
 		if (sk)	{
 			sock_put(sk);
