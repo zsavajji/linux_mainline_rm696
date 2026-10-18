@@ -10,16 +10,57 @@
  * <name>:<gpio>:<type>[:<flag>...], type sysfs (key: the gpio-keys NOLO lists on other boards, not
  * the N9's), flags output, init_active (inverted is unused on the N9). A line something else already
  * claimed (the DT's sleep_ind LED) is left to it.
+ *
+ * A modem that went off with cmt_en still high (a root `reboot` that cut sscd's power-off short, the
+ * first boot after a flash) doesn't start when cmt_en is driven active here. sscd powers it on only
+ * when it starts, ~20 s in and after csd, and csd then kept the SIM as PIN-required and the network
+ * offline while sscd had the modem registered (2026-10-18), until csd was restarted. So once
+ * udev's netif-up has opened phonet0 (~8 s), a link still without carrier 2 s later (ssi-protocol
+ * turns it on at the modem's answer, 0.3 s on a normal boot) gets sscd's own RAPU2 power-on:
+ * cmt_rst_rq and cmt_en low, 20 ms, both high. Only until the link first comes up and for at most
+ * a minute: later modem resets are sscd's.
  */
+#include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/netdevice.h>
 #include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/workqueue.h>
+#include <net/net_namespace.h>
 
 static char *nokia_gpio_param __initdata;
+static int nokia_cmt_en = -1, nokia_cmt_rst_rq = -1;
+static unsigned int nokia_modem_checks, nokia_modem_silent;
+
+static void nokia_modem_check(struct work_struct *work);
+static DECLARE_DELAYED_WORK(nokia_modem_work, nokia_modem_check);
+
+static void nokia_modem_check(struct work_struct *work)
+{
+	struct net_device *dev = dev_get_by_name(&init_net, "phonet0");
+	bool open = dev && netif_running(dev), up = dev && netif_carrier_ok(dev);
+
+	if (dev)
+		dev_put(dev);
+	if (up || ++nokia_modem_checks > 60)
+		return;
+	if (!open || ++nokia_modem_silent < 2) {
+		schedule_delayed_work(&nokia_modem_work, HZ);
+		return;
+	}
+	pr_info("nokia-bootparams: no answer from the modem on phonet0: powering it on\n");
+	if (nokia_cmt_rst_rq >= 0)
+		gpio_set_value_cansleep(nokia_cmt_rst_rq, 0);
+	gpio_set_value_cansleep(nokia_cmt_en, 0);
+	msleep(20);
+	gpio_set_value_cansleep(nokia_cmt_en, 1);
+	if (nokia_cmt_rst_rq >= 0)
+		gpio_set_value_cansleep(nokia_cmt_rst_rq, 1);
+}
 
 static int __init nokia_gpio_setup(char *str)
 {
@@ -69,6 +110,10 @@ static void __init nokia_gpio_export_one(char *line)
 	if (err) {
 		pr_info("nokia-bootparams: %s (gpio %u) not exported: %d\n", name, gpio, err);
 		kfree(name);
+	} else if (output && !strcmp(name, "cmt_en")) {
+		nokia_cmt_en = gpio;
+	} else if (output && !strcmp(name, "cmt_rst_rq")) {
+		nokia_cmt_rst_rq = gpio;
 	}
 }
 
@@ -85,6 +130,8 @@ static int __init nokia_gpio_init(void)
 	while ((line = strsep(&p, ",")))
 		nokia_gpio_export_one(line);
 	kfree(param);
+	if (nokia_cmt_en >= 0)
+		schedule_delayed_work(&nokia_modem_work, HZ);
 	return 0;
 }
 late_initcall(nokia_gpio_init);
