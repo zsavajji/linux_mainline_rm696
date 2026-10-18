@@ -20240,9 +20240,14 @@ void nl80211_send_disconnected(struct cfg80211_registered_device *rdev,
 		return;
 	}
 
+	/*
+	 * The reason code only when the AP sent it, as 2.6.32 did: Harmattan's
+	 * wlancond takes a reason without DISCONNECTED_BY_AP for a disconnect it
+	 * asked for and ignores the event, so a lost connection went unnoticed.
+	 */
 	if (nla_put_u32(msg, NL80211_ATTR_WIPHY, rdev->wiphy_idx) ||
 	    nla_put_u32(msg, NL80211_ATTR_IFINDEX, netdev->ifindex) ||
-	    (reason &&
+	    (from_ap && reason &&
 	     nla_put_u16(msg, NL80211_ATTR_REASON_CODE, reason)) ||
 	    (from_ap &&
 	     nla_put_flag(msg, NL80211_ATTR_DISCONNECTED_BY_AP)) ||
