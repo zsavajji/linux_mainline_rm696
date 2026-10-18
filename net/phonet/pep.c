@@ -801,8 +801,9 @@ static struct sock *pep_sock_accept(struct sock *sk,
 	}
 	sk_acceptq_removed(sk);
 
+	/* pep_get_sb() reads from skb->data: pull the header, as pep_connresp_rcv() does */
 	err = -EPROTO;
-	if (!pskb_may_pull(skb, sizeof(*hdr) + 4))
+	if (!pskb_pull(skb, sizeof(*hdr) + 4))
 		goto drop;
 
 	hdr = pnp_hdr(skb);
