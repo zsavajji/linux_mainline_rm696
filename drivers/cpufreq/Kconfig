@@ -207,11 +207,13 @@ comment "CPU frequency scaling drivers"
 
 config CPUFREQ_INPUT_BOOST
 	bool "Boost the CPU on input"
-	depends on INPUT
+	depends on INPUT && PM
 	help
 	  After any key or touch event, CPU 0's policy runs at its highest
 	  frequency and the CPU stays out of deep idle for a second, as the
-	  Nokia N9's stock kernel did (its OMAP3 PM optimizer).
+	  Nokia N9's stock kernel did (its OMAP3 PM optimizer). A write to
+	  /sys/power/pm_optimizer_rotation (Harmattan's sensord, at a screen
+	  rotation) raises the frequency for a second too.
 
 config CPUFREQ_DT
 	tristate "Generic DT based cpufreq driver"

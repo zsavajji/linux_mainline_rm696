@@ -6,12 +6,18 @@
  * latency) for a second. A gesture then starts at full speed, before the governor notices the load.
  * Only devices with keys (a touchscreen has BTN_TOUCH), so an accelerometer's stream doesn't keep
  * the CPU up, as Nokia's ignore list did.
+ * The optimizer's other trigger is here too: a write to /sys/power/pm_optimizer_rotation (Harmattan's
+ * sensord, when the screen's top edge changes) runs the CPU at full speed for a second, for the
+ * rotation animation; without an idle limit, as stock.
  */
 #include <linux/cpufreq.h>
 #include <linux/input.h>
+#include <linux/kobject.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/pm_qos.h>
 #include <linux/slab.h>
+#include <linux/sysfs.h>
 #include <linux/workqueue.h>
 
 static unsigned int boost_ms = 1000;
@@ -22,32 +28,49 @@ static unsigned int latency_us = 6000;
 module_param(latency_us, uint, 0644);
 MODULE_PARM_DESC(latency_us, "The CPU's idle exit latency limit while boosted (us)");
 
-static struct freq_qos_request freq_req;
+static struct freq_qos_request freq_req, rotation_req;
 static struct pm_qos_request latency_req;
-static bool freq_req_added;	/* once the cpufreq policy exists */
 static bool boosted;
+static DEFINE_MUTEX(rotation_lock);
 
 static void input_boost_on(struct work_struct *work);
 static void input_boost_off(struct work_struct *work);
+static void rotation_boost_off(struct work_struct *work);
 static DECLARE_WORK(boost_on_work, input_boost_on);
 static DECLARE_DELAYED_WORK(boost_off_work, input_boost_off);
+static DECLARE_DELAYED_WORK(rotation_off_work, rotation_boost_off);
+
+/* CPU 0's policy at its highest frequency until freq_unboost(req); false without cpufreq */
+static bool freq_boost(struct freq_qos_request *req)
+{
+	struct cpufreq_policy *policy;
+	int ret;
+
+	if (!freq_qos_request_active(req)) {
+		policy = cpufreq_cpu_get(0);
+		if (!policy)
+			return false;	/* no cpufreq (yet): nothing to boost */
+		ret = freq_qos_add_request(&policy->constraints, req, FREQ_QOS_MIN,
+					   FREQ_QOS_MIN_DEFAULT_VALUE);
+		cpufreq_cpu_put(policy);
+		if (ret < 0)
+			return false;
+	}
+	/* cpufreq clamps it to the policy's maximum now (boost OPPs count only with boost on) */
+	freq_qos_update_request(req, FREQ_QOS_MAX_DEFAULT_VALUE);
+	return true;
+}
+
+static void freq_unboost(struct freq_qos_request *req)
+{
+	if (freq_qos_request_active(req))
+		freq_qos_update_request(req, FREQ_QOS_MIN_DEFAULT_VALUE);
+}
 
 static void input_boost_on(struct work_struct *work)
 {
-	struct cpufreq_policy *policy;
-
-	if (!freq_req_added) {
-		policy = cpufreq_cpu_get(0);
-		if (!policy)
-			return;		/* no cpufreq (yet): nothing to boost */
-		freq_req_added = freq_qos_add_request(&policy->constraints, &freq_req,
-						      FREQ_QOS_MIN, FREQ_QOS_MIN_DEFAULT_VALUE) >= 0;
-		cpufreq_cpu_put(policy);
-		if (!freq_req_added)
-			return;
-	}
-	/* cpufreq clamps it to the policy's maximum now (boost OPPs count only with boost on) */
-	freq_qos_update_request(&freq_req, FREQ_QOS_MAX_DEFAULT_VALUE);
+	if (!freq_boost(&freq_req))
+		return;
 	cpu_latency_qos_update_request(&latency_req, latency_us);
 	mod_delayed_work(system_wq, &boost_off_work, msecs_to_jiffies(boost_ms));
 }
@@ -55,10 +78,38 @@ static void input_boost_on(struct work_struct *work)
 static void input_boost_off(struct work_struct *work)
 {
 	WRITE_ONCE(boosted, false);
-	if (freq_req_added)
-		freq_qos_update_request(&freq_req, FREQ_QOS_MIN_DEFAULT_VALUE);
+	freq_unboost(&freq_req);
 	cpu_latency_qos_update_request(&latency_req, PM_QOS_DEFAULT_VALUE);
 }
+
+static void rotation_boost_off(struct work_struct *work)
+{
+	freq_unboost(&rotation_req);
+}
+
+/* Stock's file: any number written is a rotation; reads say load:100 while the boost lasts */
+static ssize_t rotation_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "load:%u\n", delayed_work_pending(&rotation_off_work) ? 100 : 0);
+}
+
+static ssize_t rotation_store(struct kobject *kobj, struct kobj_attribute *attr,
+			      const char *buf, size_t n)
+{
+	unsigned int value;
+
+	if (kstrtouint(buf, 0, &value))
+		return -EINVAL;
+
+	mutex_lock(&rotation_lock);	/* freq_boost() adds the request at the first one */
+	if (freq_boost(&rotation_req))
+		mod_delayed_work(system_wq, &rotation_off_work, msecs_to_jiffies(boost_ms));
+	mutex_unlock(&rotation_lock);
+	return n;
+}
+
+static struct kobj_attribute rotation_attr =
+	__ATTR(pm_optimizer_rotation, 0644, rotation_show, rotation_store);
 
 static void input_boost_event(struct input_handle *handle, unsigned int type,
 			      unsigned int code, int value)
@@ -135,7 +186,12 @@ static struct input_handler input_boost_handler = {
 
 static int __init input_boost_init(void)
 {
+	int error;
+
 	cpu_latency_qos_add_request(&latency_req, PM_QOS_DEFAULT_VALUE);
+	error = sysfs_create_file(power_kobj, &rotation_attr.attr);
+	if (error)
+		pr_warn("cpufreq-input-boost: no /sys/power/%s: %d\n", rotation_attr.attr.name, error);
 	return input_register_handler(&input_boost_handler);
 }
 late_initcall(input_boost_init);
