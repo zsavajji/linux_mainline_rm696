@@ -1071,6 +1071,9 @@ int lis3lv02d_init_dt(struct lis3lv02d *lis3)
 	if (of_property_read_bool(np, "st,hipass2-disable"))
 		pdata->hipass_ctrl |= LIS3_HIPASS2_DISABLE;
 
+	if (of_property_read_bool(np, "st,use-block-read"))
+		pdata->driver_features |= LIS3_USE_BLOCK_READ;
+
 	if (of_property_read_s32(np, "st,axis-x", &sval) == 0)
 		pdata->axis_x = sval;
 	if (of_property_read_s32(np, "st,axis-y", &sval) == 0)

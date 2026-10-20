@@ -17,6 +17,11 @@ Required properties for the I2C bindings:
  - Vdd-supply:		The input supply for Vdd
  - Vdd_IO-supply:	The input supply for Vdd_IO
 
+Optional properties for the I2C bindings:
+ - st,use-block-read:	if present, read the data registers in one I2C block
+			transfer (register address auto-increment) instead of
+			one transfer per axis
+
 
 Optional properties for all bus drivers:
 

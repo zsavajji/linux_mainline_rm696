@@ -322,6 +322,9 @@
 
 		st,wu-duration-1 = <8>;
 		st,wu-duration-2 = <8>;
+
+		/* All three axes in one I2C transfer, as Nokia's kernel read them */
+		st,use-block-read;
 	};
 };
 
