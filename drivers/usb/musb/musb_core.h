@@ -401,6 +401,9 @@ struct musb {
 	unsigned		test_mode:1;
 	unsigned		softconnect:1;
 
+	/* the gadget core allows setup/suspend/resume/disconnect/reset callbacks */
+	unsigned		async_callbacks:1;
+
 	unsigned		flush_irq_work:1;
 
 	u8			address;
